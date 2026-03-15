@@ -15,7 +15,7 @@
         "name": "Whallysson Avelino",
         "email": "whallysson.dev@gmail.com"
       },
-      "source": ".",
+      "source": "./plugins/chromex",
       "category": "development"
     }
   ]
