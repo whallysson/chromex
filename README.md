@@ -44,14 +44,30 @@ chmod +x skills/chromex/scripts/chromex.mjs
 alias chromex="node $(pwd)/skills/chromex/scripts/chromex.mjs"
 ```
 
-### Launch and connect
+### Connect to your browser
+
+**Option A: Launch a new browser** (recommended -- no setup needed)
 
 ```bash
-# Option A: Launch a new browser with debugging enabled (recommended)
 chromex launch --url https://example.com
+```
 
-# Option B: Connect to an already-running browser
-# (enable at chrome://inspect/#remote-debugging first)
+This starts Chrome/Brave/Edge with remote debugging pre-enabled. No manual configuration required.
+
+**Option B: Connect to an already-running browser**
+
+You **must** enable remote debugging first:
+
+1. Open your browser (Chrome, Brave, Edge, etc.)
+2. Navigate to `chrome://inspect/#remote-debugging`
+3. **Toggle the switch ON** to enable remote debugging
+4. Run `chromex list` to verify the connection
+
+> **Important:** Without step 3, chromex cannot connect to your browser. This is a one-time setup -- the setting persists across browser restarts.
+
+> **Note:** With Option B, Chrome will show an "Allow debugging" dialog the first time you access each tab. Click "Allow" once per tab -- the daemon keeps the session alive after that.
+
+```bash
 chromex list
 ```
 
@@ -265,6 +281,22 @@ chromex click <target> @e4
 Refs are assigned to all interactive elements (buttons, links, inputs, checkboxes, radios, dropdowns, tabs, switches). They persist until the next `snap --refs` call.
 
 Supported ref commands: `click @eN`, `fill @eN "value"`, `hover @eN`.
+
+## Auto-Approve (Optional)
+
+By default, Claude Code asks for permission before running each chromex command. To skip the confirmation dialogs, add this to your `~/.claude/settings.json`:
+
+```json
+{
+  "permissions": {
+    "allow": [
+      "Bash(node *chromex/scripts/chromex.mjs *)"
+    ]
+  }
+}
+```
+
+> **Warning:** This means all chromex commands will run without asking. The security config (`~/.chromex/config.json`) still applies -- domain filtering, CDP blocklist, and audit log remain active.
 
 ## Security
 
