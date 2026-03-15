@@ -1,0 +1,40 @@
+{
+  "name": "chromex",
+  "version": "1.0.0",
+  "description": "Zero-dependency Chrome DevTools Protocol CLI for AI agents",
+  "type": "module",
+  "bin": {
+    "chromex": "./skills/chromex/scripts/chromex.mjs"
+  },
+  "scripts": {
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "keywords": [
+    "chrome",
+    "devtools",
+    "cdp",
+    "automation",
+    "ai-agent",
+    "claude-code",
+    "browser",
+    "testing",
+    "scraping"
+  ],
+  "author": {
+    "name": "Whallysson Avelino",
+    "email": "whallysson.dev@gmail.com",
+    "url": "https://github.com/whallysson"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/whallysson/chromex"
+  },
+  "engines": {
+    "node": ">=22.0.0"
+  },
+  "devDependencies": {
+    "vitest": "^3.0.0"
+  }
+}
