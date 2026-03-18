@@ -282,9 +282,71 @@ Refs are assigned to all interactive elements (buttons, links, inputs, checkboxe
 
 Supported ref commands: `click @eN`, `fill @eN "value"`, `hover @eN`.
 
-## Auto-Approve (Optional)
+## MCP Server (Recommended for Claude Code)
 
-By default, Claude Code asks for permission before running each chromex command. To skip the confirmation dialogs, add this to your `~/.claude/settings.json`:
+Chromex also ships as an MCP server -- typed tools, auto-approve with one line, no Bash globs.
+
+### Setup
+
+```bash
+# Global (all projects)
+claude mcp add chromex -s user npx chromex-mcp@latest
+
+# Or project-only
+claude mcp add chromex npx chromex-mcp@latest
+```
+
+### Auto-Approve
+
+Add to `~/.claude/settings.json`:
+
+```json
+{
+  "permissions": {
+    "allow": ["mcp__chromex"]
+  }
+}
+```
+
+This approves all 52 MCP tools at once. For granular control, approve individual tools:
+
+```json
+{
+  "permissions": {
+    "allow": [
+      "mcp__chromex__chromex_list",
+      "mcp__chromex__chromex_snapshot",
+      "mcp__chromex__chromex_screenshot",
+      "mcp__chromex__chromex_perf"
+    ]
+  }
+}
+```
+
+### Why MCP over CLI?
+
+| | CLI (Bash) | MCP Server |
+|---|---|---|
+| Auto-approve | Fragile glob pattern | `"mcp__chromex"` -- one line |
+| Permissions | All-or-nothing | Per-tool granularity |
+| Parameters | Positional string args | Typed JSON Schema |
+| Annotations | None | `readOnlyHint`, `destructiveHint` |
+| Token cost | ~60-80 overhead/call | ~15-25 overhead/call |
+| Screenshots | Returns file path | Returns inline image (base64) |
+
+The CLI still works and is useful for terminal, scripts, and CI/CD. The MCP server is the recommended interface for Claude Code.
+
+### npm
+
+```bash
+npm install -g chromex-mcp    # Global install
+chromex-mcp                    # Run MCP server
+chromex-cli list               # CLI also available
+```
+
+## Auto-Approve for CLI (Alternative)
+
+If you prefer the CLI interface, add this to `~/.claude/settings.json`:
 
 ```json
 {
@@ -296,7 +358,7 @@ By default, Claude Code asks for permission before running each chromex command.
 }
 ```
 
-> **Warning:** This means all chromex commands will run without asking. The security config (`~/.chromex/config.json`) still applies -- domain filtering, CDP blocklist, and audit log remain active.
+> **Warning:** This approves all chromex commands without distinction. The security config (`~/.chromex/config.json`) still applies -- domain filtering, CDP blocklist, and audit log remain active.
 
 ## Security
 

@@ -1,5 +1,26 @@
+# Dependencies
 node_modules/
-.DS_Store
+
+# Build & lock
+bun.lock
+package-lock.json
+*.tgz
+
+# IDE
 .idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
 *.log
+
+# Temp
 /tmp/
+
+# Claude Code
+CLAUDE.md

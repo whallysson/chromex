@@ -1,16 +1,24 @@
 {
-  "name": "chromex",
+  "name": "chromex-mcp",
   "version": "1.0.0",
-  "description": "Zero-dependency Chrome DevTools Protocol CLI for AI agents",
+  "description": "Zero-dependency Chrome DevTools Protocol MCP server for AI agents. 52 typed tools, per-tab daemons, security hardened.",
   "type": "module",
   "bin": {
-    "chromex": "./skills/chromex/scripts/chromex.mjs"
+    "chromex-mcp": "./plugins/chromex/skills/chromex/scripts/mcp-server.mjs",
+    "chromex-cli": "./plugins/chromex/skills/chromex/scripts/chromex.mjs"
   },
+  "files": [
+    "plugins/chromex/skills/chromex/scripts/",
+    "LICENSE",
+    "README.md"
+  ],
   "scripts": {
     "test": "vitest run",
     "test:watch": "vitest"
   },
   "keywords": [
+    "mcp",
+    "mcp-server",
     "chrome",
     "devtools",
     "cdp",
@@ -19,7 +27,8 @@
     "claude-code",
     "browser",
     "testing",
-    "scraping"
+    "scraping",
+    "playwright-alternative"
   ],
   "author": {
     "name": "Whallysson Avelino",
@@ -31,6 +40,7 @@
     "type": "git",
     "url": "https://github.com/whallysson/chromex"
   },
+  "homepage": "https://github.com/whallysson/chromex#mcp-server-recommended-for-claude-code",
   "engines": {
     "node": ">=22.0.0"
   },
