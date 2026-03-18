@@ -106,8 +106,9 @@ export async function runDaemon(targetId, config) {
     idleTimer = setTimeout(shutdown, config.idleTimeout);
   }
 
-  // Ref-based selection state: stores mapping from @eN -> {backendNodeId, role, name}
+  // Per-tab state: ref map for @eN resolution + fingerprints for incremental diff
   let currentRefMap = new Map();
+  let previousFingerprints = null;
 
   async function handleCommand({ cmd, args }) {
     resetIdle();
@@ -145,8 +146,13 @@ export async function runDaemon(targetId, config) {
         }
         case 'snap': case 'snapshot': {
           const useRefs = args.includes('--refs') || args.includes('-i');
-          const snapResult = await snapshotStr(cdp, sessionId, true, useRefs);
+          const forceFull = args.includes('--full');
+          const depthArg = args.find(a => a.startsWith('--depth='));
+          const maxDepth = depthArg ? parseInt(depthArg.split('=')[1]) || 0 : 0;
+          const prevFp = forceFull ? null : previousFingerprints;
+          const snapResult = await snapshotStr(cdp, sessionId, true, useRefs, prevFp, maxDepth);
           result = snapResult.text;
+          previousFingerprints = snapResult.fingerprints;
           if (useRefs && snapResult.refMap.size > 0) {
             currentRefMap = snapResult.refMap;
           }

@@ -97,10 +97,12 @@ const TOOLS = [
 
   // == INSPECT (readOnly) ==
   tool('chromex_snapshot',
-    'Accessibility tree snapshot. Prefer over HTML for page structure. Use refs=true to get @eN references for click/fill/hover.',
+    'Accessibility tree snapshot. Returns incremental diff after first call (only changed nodes). Use refs=true to get @eN references for click/fill/hover.',
     {
       target: P_TARGET,
       refs: { type: 'boolean', description: 'Assign @eN refs to interactive elements', default: false },
+      full: { type: 'boolean', description: 'Force full snapshot (skip incremental diff)', default: false },
+      depth: { type: 'number', description: 'Max tree depth (0 = unlimited)' },
     }, ['target'], RO),
 
   tool('chromex_html',
@@ -445,7 +447,13 @@ const TOOLS = [
 function toolToCmd(name, p) {
   switch (name) {
     // Inspect
-    case 'chromex_snapshot':   return { cmd: 'snap', args: p.refs ? ['--refs'] : [] };
+    case 'chromex_snapshot': {
+      const a = [];
+      if (p.refs) a.push('--refs');
+      if (p.full) a.push('--full');
+      if (p.depth) a.push(`--depth=${p.depth}`);
+      return { cmd: 'snap', args: a };
+    }
     case 'chromex_html':       return { cmd: 'html', args: p.selector ? [p.selector] : [] };
     case 'chromex_screenshot': {
       const a = [];

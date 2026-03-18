@@ -52,6 +52,8 @@ chromex.mjs stop    [target]                        # stop daemon(s)
 ```bash
 chromex.mjs snap    <target>                    # accessibility tree (prefer over html)
 chromex.mjs snap    <target> --refs             # with interactive refs (@e1, @e2...)
+chromex.mjs snap    <target> --refs --full      # force full snapshot (skip diff)
+chromex.mjs snap    <target> --depth=2          # limit tree depth
 chromex.mjs html    <target> [selector]         # full page or element HTML
 chromex.mjs shot    <target> [file] [--full]    # screenshot (viewport or full page)
 chromex.mjs net     <target>                    # resource timing entries
