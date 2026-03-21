@@ -280,3 +280,65 @@ describe('Name Truncation', () => {
     expect(result.text).toContain('V'.repeat(200) + '...');
   });
 });
+
+// ---- New element marker tests ----
+
+describe('New Element Markers', () => {
+  it('new elements in incremental snapshot are prefixed with *', async () => {
+    const snapshotStr = await getSnapshotStr();
+    const nodesV1 = [
+      axNode('root', 'RootWebArea', 'Page', { childIds: ['btn1'] }),
+      axNode('btn1', 'button', 'Original', { parentId: 'root' }),
+    ];
+    const nodesV2 = [
+      axNode('root', 'RootWebArea', 'Page', { childIds: ['btn1', 'btn2'] }),
+      axNode('btn1', 'button', 'Original', { parentId: 'root' }),
+      axNode('btn2', 'button', 'New Button', { parentId: 'root' }),
+    ];
+
+    const cdpV1 = mockCdp(nodesV1);
+    const first = await snapshotStr(cdpV1, 'sid', true, false, null);
+
+    const cdpV2 = mockCdp(nodesV2);
+    const second = await snapshotStr(cdpV2, 'sid', true, false, first.fingerprints);
+
+    // New button should be prefixed with *
+    expect(second.text).toContain('*[button] New Button');
+    // Original button should NOT have * (it existed before, but changed because childIds changed on root)
+    expect(second.text).not.toMatch(/\*\[button\] Original/);
+  });
+
+  it('first snapshot has no * markers', async () => {
+    const snapshotStr = await getSnapshotStr();
+    const nodes = [
+      axNode('root', 'RootWebArea', 'Page', { childIds: ['btn'] }),
+      axNode('btn', 'button', 'Click', { parentId: 'root' }),
+    ];
+    const cdp = mockCdp(nodes);
+    const result = await snapshotStr(cdp, 'sid', true, false, null);
+
+    expect(result.text).not.toContain('*');
+  });
+
+  it('new elements with refs show * before @eN', async () => {
+    const snapshotStr = await getSnapshotStr();
+    const nodesV1 = [
+      axNode('root', 'RootWebArea', 'Page', { childIds: ['btn1'] }),
+      axNode('btn1', 'button', 'First', { parentId: 'root' }),
+    ];
+    const nodesV2 = [
+      axNode('root', 'RootWebArea', 'Page', { childIds: ['btn1', 'btn2'] }),
+      axNode('btn1', 'button', 'First', { parentId: 'root' }),
+      axNode('btn2', 'button', 'Second', { parentId: 'root' }),
+    ];
+
+    const cdpV1 = mockCdp(nodesV1);
+    const first = await snapshotStr(cdpV1, 'sid', true, true, null);
+
+    const cdpV2 = mockCdp(nodesV2);
+    const second = await snapshotStr(cdpV2, 'sid', true, true, first.fingerprints);
+
+    // New element should have * before the ref tag
+    expect(second.text).toMatch(/\*@e\d+ \[button\] Second/);
+  });
+});

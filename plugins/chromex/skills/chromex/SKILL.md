@@ -173,12 +173,28 @@ chromex.mjs click <target> @e5 --no-snap
 
 **Note on async actions:** The auto-snapshot waits 300ms for DOM to settle after the action. If a click triggers an API call (e.g. form submit, data fetch), the snapshot may capture the loading state rather than the final result. In those cases, use `wait networkidle` after the action before relying on the returned refs.
 
+## Snapshot Enhancements
+
+**New element markers:** In incremental snapshots, elements that did not exist in the previous snapshot are prefixed with `*`. This helps identify what changed after an action:
+```
+[incremental: 2 changed, 14 unchanged]
+@e5 [textbox] Login = "user@test.com"
+  *[StaticText] user@test.com          <-- new element
+```
+
+**Scroll detection:** Snapshots include a `[scroll]` footer showing scrollable containers and how much hidden content remains:
+```
+[scroll: page: down:2330px | sidebar: down:800px, up:200px]
+```
+This tells you there is content below/above that requires `scroll` to reveal. Only reports containers with `overflow: auto|scroll` and >50px of hidden content.
+
 ## Tips
 
 - Prefer `snap --refs` for AI agents -- refs are stable, concise, no CSS selectors needed
 - Prefer `snap` over `html` for page structure
 - After `click`/`fill`/`type`, read the auto-snapshot in the response instead of calling `snap` again
 - Only call `snap` explicitly when: (1) starting a new page, (2) after `wait`/`waitfor`, (3) after `scroll`
+- Check `[scroll]` footer to know if there is hidden content that needs scrolling
 - Use `waitfor` before interacting with dynamically-loaded elements
 - Use `fill` for form fields -- handles React/Vue/Angular controlled inputs
 - Use `launch` to skip Chrome's "Allow debugging" modal entirely

@@ -38,7 +38,7 @@ function truncate(str, max = MAX_NAME_LENGTH) {
   return str.slice(0, max) + '...';
 }
 
-function formatAxNode(node, depth, refIndex, refs) {
+function formatAxNode(node, depth, refIndex, refs, isNew = false) {
   const role = node.role?.value || '';
   const name = truncate(node.name?.value ?? '');
   const value = node.value?.value;
@@ -50,7 +50,8 @@ function formatAxNode(node, depth, refIndex, refs) {
     refIndex.value++;
   }
 
-  let line = `${indent}${refTag}[${role}]`;
+  const newTag = isNew ? '*' : '';
+  let line = `${indent}${newTag}${refTag}[${role}]`;
   if (name !== '') line += ` ${name}`;
   if (!(value === '' || value == null)) line += ` = ${JSON.stringify(truncate(String(value)))}`;
   return line;
@@ -91,6 +92,54 @@ function buildFingerprints(nodes, nodesById, childrenByParent, compact) {
   return fingerprints;
 }
 
+// Detect scrollable containers. Returns human-readable summary lines.
+// Only reports containers with overflow:auto|scroll and >50px hidden content.
+async function detectScrollables(cdp, sid) {
+  try {
+    const { result } = await cdp.send('Runtime.evaluate', {
+      expression: `(() => {
+        const MIN = 50;
+        const out = [];
+        const walk = (el, path) => {
+          if (el.nodeType !== 1 || out.length >= 10) return;
+          const sh = el.scrollHeight, sw = el.scrollWidth;
+          const ch = el.clientHeight, cw = el.clientWidth;
+          const isRoot = el === document.documentElement || el === document.body;
+          const style = isRoot ? null : getComputedStyle(el);
+          const oy = isRoot ? 'auto' : style.overflowY;
+          const ox = isRoot ? 'auto' : style.overflowX;
+          const scrollableY = isRoot || oy === 'auto' || oy === 'scroll';
+          const scrollableX = isRoot || ox === 'auto' || ox === 'scroll';
+          if (((scrollableY && sh > ch + MIN) || (scrollableX && sw > cw + MIN)) && ch > 0) {
+            const dirs = [];
+            if (scrollableY && sh > ch + MIN) {
+              const down = sh - ch - el.scrollTop;
+              const up = el.scrollTop;
+              if (up > MIN) dirs.push('up:' + Math.round(up) + 'px');
+              if (down > MIN) dirs.push('down:' + Math.round(down) + 'px');
+            }
+            if (scrollableX && sw > cw + MIN) {
+              const right = sw - cw - el.scrollLeft;
+              const left = el.scrollLeft;
+              if (left > MIN) dirs.push('left:' + Math.round(left) + 'px');
+              if (right > MIN) dirs.push('right:' + Math.round(right) + 'px');
+            }
+            if (dirs.length) {
+              const label = isRoot ? 'page' : (el.getAttribute('aria-label') || el.getAttribute('role') || el.id || el.tagName.toLowerCase());
+              out.push(label + ': ' + dirs.join(', '));
+            }
+          }
+          for (const c of el.children) walk(c);
+        };
+        walk(document.documentElement);
+        return out;
+      })()`,
+      returnByValue: true,
+    }, sid);
+    return result?.value || [];
+  } catch { return []; }
+}
+
 // refMap is populated when refs=true: { refNumber -> { backendNodeId, role, name } }
 // The caller (daemon) stores this map for later ref resolution.
 // previousFingerprints: Map from prior snapshot for incremental diff.
@@ -108,6 +157,7 @@ export async function snapshotStr(cdp, sid, compact = true, refs = false, previo
 
   const currentFingerprints = buildFingerprints(nodes, nodesById, childrenByParent, compact);
   const isDiff = previousFingerprints !== null && previousFingerprints.size > 0;
+  const scrollables = await detectScrollables(cdp, sid);
 
   const refIndex = { value: 1 };
   const refMap = new Map();
@@ -157,8 +207,9 @@ export async function snapshotStr(cdp, sid, compact = true, refs = false, previo
 
     const role = node.role?.value || '';
     const currentRef = refIndex.value;
+    const isNew = isDiff && !previousFingerprints.has(node.nodeId);
 
-    lines.push(formatAxNode(node, depth, refIndex, refs));
+    lines.push(formatAxNode(node, depth, refIndex, refs, isNew));
 
     if (refs && refIndex.value > currentRef) {
       refMap.set(currentRef, {
@@ -213,6 +264,10 @@ export async function snapshotStr(cdp, sid, compact = true, refs = false, previo
     const totalVisible = currentFingerprints.size;
     const changedCount = totalVisible - unchangedCount;
     text = `[incremental: ${changedCount} changed, ${unchangedCount} unchanged]\n${text}`;
+  }
+  // Append scroll info footer when scrollable containers exist
+  if (scrollables.length > 0) {
+    text += `\n[scroll: ${scrollables.join(' | ')}]`;
   }
 
   return { text, refMap, fingerprints: currentFingerprints };
