@@ -155,10 +155,30 @@ chromex.mjs hover <target> @e3
 
 `shot` saves at native resolution: image px = CSS px x DPR. `clickxy` takes CSS pixels.
 
+## Auto-Snapshot
+
+Interactive commands (`click`, `clickxy`, `fill`, `type`, `navigate`, `select`, `check`, `clear`, `form`, `dialog`, `loadall`, `drag`, `touch`, `upload`) automatically append an incremental snapshot with refs after executing. This means:
+
+- **No need to call `snap` after interacting** -- the page state is already in the response
+- The returned refs (`@eN`) are immediately usable for the next action
+- Navigate resets the snapshot cache, so the first post-navigation snapshot is always full
+
+**Workflow (before):** `snap --refs` -> read refs -> `click @e5` -> `snap --refs` -> read refs -> `click @e8`
+**Workflow (now):** `snap --refs` -> read refs -> `click @e5` -> read refs from response -> `click @e8`
+
+To disable auto-snapshot (e.g. for rapid scripting), pass `--no-snap` (CLI) or `noSnap: true` (MCP):
+```bash
+chromex.mjs click <target> @e5 --no-snap
+```
+
+**Note on async actions:** The auto-snapshot waits 300ms for DOM to settle after the action. If a click triggers an API call (e.g. form submit, data fetch), the snapshot may capture the loading state rather than the final result. In those cases, use `wait networkidle` after the action before relying on the returned refs.
+
 ## Tips
 
 - Prefer `snap --refs` for AI agents -- refs are stable, concise, no CSS selectors needed
 - Prefer `snap` over `html` for page structure
+- After `click`/`fill`/`type`, read the auto-snapshot in the response instead of calling `snap` again
+- Only call `snap` explicitly when: (1) starting a new page, (2) after `wait`/`waitfor`, (3) after `scroll`
 - Use `waitfor` before interacting with dynamically-loaded elements
 - Use `fill` for form fields -- handles React/Vue/Angular controlled inputs
 - Use `launch` to skip Chrome's "Allow debugging" modal entirely

@@ -244,7 +244,8 @@ async function main() {
 
   const conn = await getOrStartTabDaemon(targetId, config);
 
-  const cmdArgs = args.slice(1);
+  const noSnap = args.includes('--no-snap');
+  const cmdArgs = args.slice(1).filter(a => a !== '--no-snap');
 
   // Juntar argumentos para comandos que aceitam texto livre
   if (cmd === 'eval') {
@@ -278,6 +279,7 @@ async function main() {
     process.exit(1);
   }
 
+  if (noSnap) cmdArgs.push('--no-snap');
   const response = await sendCommand(conn, { cmd, args: cmdArgs });
 
   if (response.ok) {

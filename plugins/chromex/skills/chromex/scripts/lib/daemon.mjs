@@ -46,6 +46,15 @@ import { touchStr } from './commands/touch.mjs';
 import { domsnapshotStr } from './commands/domsnapshot.mjs';
 import { parseRef, clickRefStr, hoverRefStr, fillRefStr } from './commands/refs.mjs';
 import { highlightStr } from './commands/highlight.mjs';
+import { sleep } from './utils.mjs';
+
+// Commands that modify visible DOM and should trigger automatic post-action snapshot.
+// After these commands, an incremental snapshot with refs is appended to the result,
+// so the AI agent sees the page state without needing a separate snapshot call.
+const AUTO_SNAP_CMDS = new Set([
+  'click', 'clickxy', 'type', 'fill', 'clear', 'select', 'check', 'form',
+  'nav', 'navigate', 'dialog', 'loadall', 'drag', 'touch', 'upload',
+]);
 
 export function getOrCreateToken(config) {
   if (!config.socketAuth) return null;
@@ -114,10 +123,18 @@ export async function runDaemon(targetId, config) {
     resetIdle();
     const auditResult = { ok: true };
     try {
+      // Strip --no-snap before dispatch so it doesn't contaminate command args
+      // (e.g. fill would type "--no-snap" into the input field).
+      const noSnap = args.includes('--no-snap');
+      if (noSnap) args = args.filter(a => a !== '--no-snap');
+
+      let result;
+      let isRefCmd = false;
+
       // Ref-based dispatch: click @e5, fill @e3 "value", hover @e12
       if (args[0] && parseRef(args[0]) !== null) {
+        isRefCmd = true;
         const refNum = parseRef(args[0]);
-        let result;
         if (cmd === 'click') {
           result = await clickRefStr(cdp, sessionId, currentRefMap, refNum);
         } else if (cmd === 'fill') {
@@ -127,12 +144,9 @@ export async function runDaemon(targetId, config) {
         } else {
           throw new Error(`Ref @e${refNum} not supported for command "${cmd}". Use with: click, fill, hover.`);
         }
-        audit(cmd, targetId, args, auditResult, config);
-        return { ok: true, result };
       }
 
-      let result;
-      switch (cmd) {
+      if (!isRefCmd) switch (cmd) {
         // --- Comandos originais ---
         case 'list': {
           const pages = await getPages(cdp);
@@ -172,6 +186,7 @@ export async function runDaemon(targetId, config) {
           break;
         case 'nav': case 'navigate':
           result = await navStr(cdp, sessionId, args[0], config);
+          previousFingerprints = null; // Reset: new page needs full snapshot
           break;
         case 'net': case 'network':
           result = await netStr(cdp, sessionId);
@@ -322,6 +337,29 @@ export async function runDaemon(targetId, config) {
         }
       }
       audit(cmd, targetId, args, auditResult, config);
+
+      // Auto-snapshot: append incremental snapshot with refs after DOM-modifying actions.
+      // This lets the AI agent see the resulting page state in a single round-trip.
+      // Opt-out with --no-snap for scripts doing rapid sequential actions.
+      const shouldSnap = isRefCmd
+        ? (cmd === 'click' || cmd === 'fill') // hover doesn't change DOM
+        : AUTO_SNAP_CMDS.has(cmd);
+
+      if (shouldSnap && !noSnap) {
+        try {
+          // Navigate already waits for load+readyState; shorter settle for it.
+          // Other actions (click, fill) need more time for SPA re-renders.
+          const settleMs = (cmd === 'nav' || cmd === 'navigate') ? 100 : 300;
+          await sleep(settleMs);
+          const snapResult = await snapshotStr(cdp, sessionId, true, true, previousFingerprints);
+          previousFingerprints = snapResult.fingerprints;
+          if (snapResult.refMap.size > 0) {
+            currentRefMap = snapResult.refMap;
+          }
+          result = (result ?? '') + '\n\n' + snapResult.text;
+        } catch (e) { process.stderr.write(`[auto-snap] ${e.message}\n`); }
+      }
+
       return { ok: true, result: result ?? '' };
     } catch (e) {
       auditResult.ok = false;

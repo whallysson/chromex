@@ -264,6 +264,96 @@ describe('Tool Execution (no browser)', () => {
   });
 });
 
+// ---- Auto-snapshot tool property tests ----
+
+describe('Auto-Snapshot Tools', () => {
+  // Tools that modify DOM and should include noSnap parameter + auto-snapshot description
+  const AUTO_SNAP_TOOLS = [
+    'chromex_click', 'chromex_clickxy', 'chromex_type', 'chromex_fill',
+    'chromex_clear', 'chromex_select', 'chromex_check', 'chromex_form',
+    'chromex_navigate', 'chromex_dialog', 'chromex_loadall', 'chromex_drag',
+    'chromex_touch', 'chromex_upload',
+  ];
+
+  // Tools that should NOT have noSnap
+  const NO_SNAP_TOOLS = [
+    'chromex_list', 'chromex_snapshot', 'chromex_html', 'chromex_screenshot',
+    'chromex_network', 'chromex_perf', 'chromex_console', 'chromex_hover',
+    'chromex_scroll', 'chromex_wait', 'chromex_waitfor', 'chromex_eval',
+  ];
+
+  it('auto-snap tools have noSnap parameter in schema', async () => {
+    const responses = await mcpSession([
+      INIT,
+      INITIALIZED,
+      { jsonrpc: '2.0', id: 1, method: 'tools/list' },
+    ]);
+    const tools = findById(responses, 1).result.tools;
+
+    for (const name of AUTO_SNAP_TOOLS) {
+      const t = tools.find(x => x.name === name);
+      expect(t, `${name} should exist`).toBeDefined();
+      expect(t.inputSchema.properties.noSnap, `${name} should have noSnap`).toBeDefined();
+      expect(t.inputSchema.properties.noSnap.type, `${name} noSnap should be boolean`).toBe('boolean');
+    }
+  });
+
+  it('auto-snap tools mention snapshot in description', async () => {
+    const responses = await mcpSession([
+      INIT,
+      INITIALIZED,
+      { jsonrpc: '2.0', id: 1, method: 'tools/list' },
+    ]);
+    const tools = findById(responses, 1).result.tools;
+
+    for (const name of AUTO_SNAP_TOOLS) {
+      const t = tools.find(x => x.name === name);
+      expect(t.description, `${name} description should mention snapshot`).toMatch(/snapshot/i);
+    }
+  });
+
+  it('non-snap tools do NOT have noSnap parameter', async () => {
+    const responses = await mcpSession([
+      INIT,
+      INITIALIZED,
+      { jsonrpc: '2.0', id: 1, method: 'tools/list' },
+    ]);
+    const tools = findById(responses, 1).result.tools;
+
+    for (const name of NO_SNAP_TOOLS) {
+      const t = tools.find(x => x.name === name);
+      expect(t, `${name} should exist`).toBeDefined();
+      expect(t.inputSchema.properties.noSnap, `${name} should NOT have noSnap`).toBeUndefined();
+    }
+  });
+
+  it('noSnap is never required (always optional)', async () => {
+    const responses = await mcpSession([
+      INIT,
+      INITIALIZED,
+      { jsonrpc: '2.0', id: 1, method: 'tools/list' },
+    ]);
+    const tools = findById(responses, 1).result.tools;
+
+    for (const t of tools) {
+      if (t.inputSchema.properties.noSnap) {
+        expect(t.inputSchema.required, `${t.name} should not require noSnap`).not.toContain('noSnap');
+      }
+    }
+  });
+
+  it('exactly 14 tools have noSnap', async () => {
+    const responses = await mcpSession([
+      INIT,
+      INITIALIZED,
+      { jsonrpc: '2.0', id: 1, method: 'tools/list' },
+    ]);
+    const tools = findById(responses, 1).result.tools;
+    const withNoSnap = tools.filter(t => t.inputSchema.properties.noSnap);
+    expect(withNoSnap).toHaveLength(14);
+  });
+});
+
 // ---- Tool inventory tests ----
 
 describe('Tool Names', () => {

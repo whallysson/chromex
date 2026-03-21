@@ -54,6 +54,7 @@ function tool(name, description, properties, required, annotations) {
 }
 
 const P_TARGET = { type: 'string', description: 'Target ID prefix from chromex_list' };
+const P_NO_SNAP = { type: 'boolean', description: 'Skip auto-snapshot after action' };
 
 // ---- Tool definitions (52 tools) ----
 
@@ -167,10 +168,11 @@ const TOOLS = [
 
   // == NAVIGATE ==
   tool('chromex_navigate',
-    'Navigate to URL and wait for page load.',
+    'Navigate to URL and wait for page load. Returns full snapshot with refs of the new page.',
     {
       target: P_TARGET,
       url: { type: 'string', description: 'URL to navigate to' },
+      noSnap: P_NO_SNAP,
     }, ['target', 'url'], RW),
 
   tool('chromex_waitfor',
@@ -199,25 +201,28 @@ const TOOLS = [
 
   // == INTERACT ==
   tool('chromex_click',
-    'Click element by CSS selector or @eN ref from snapshot.',
+    'Click element by CSS selector or @eN ref from snapshot. Returns auto-snapshot with updated refs.',
     {
       target: P_TARGET,
       selector: { type: 'string', description: 'CSS selector or @eN ref' },
+      noSnap: P_NO_SNAP,
     }, ['target', 'selector'], RW),
 
   tool('chromex_clickxy',
-    'Click at CSS pixel coordinates.',
+    'Click at CSS pixel coordinates. Returns auto-snapshot with updated refs.',
     {
       target: P_TARGET,
       x: { type: 'number', description: 'X in CSS pixels' },
       y: { type: 'number', description: 'Y in CSS pixels' },
+      noSnap: P_NO_SNAP,
     }, ['target', 'x', 'y'], RW),
 
   tool('chromex_type',
-    'Type text at currently focused element.',
+    'Type text at currently focused element. Returns auto-snapshot with updated refs.',
     {
       target: P_TARGET,
       text: { type: 'string', description: 'Text to type' },
+      noSnap: P_NO_SNAP,
     }, ['target', 'text'], RW),
 
   tool('chromex_hover',
@@ -228,82 +233,92 @@ const TOOLS = [
     }, ['target', 'ref'], RW),
 
   tool('chromex_drag',
-    'Drag and drop between selectors or coordinate pairs (x1,y1 x2,y2).',
+    'Drag and drop between selectors or coordinate pairs (x1,y1 x2,y2). Returns auto-snapshot with updated refs.',
     {
       target: P_TARGET,
       from: { type: 'string', description: 'Source selector or x,y' },
       to: { type: 'string', description: 'Destination selector or x,y' },
+      noSnap: P_NO_SNAP,
     }, ['target', 'from', 'to'], RW),
 
   tool('chromex_touch',
-    'Touch gesture: tap, swipe, pinch, longpress.',
+    'Touch gesture: tap, swipe, pinch, longpress. Returns auto-snapshot with updated refs.',
     {
       target: P_TARGET,
       gesture: { type: 'string', enum: ['tap', 'swipe', 'pinch', 'longpress'], description: 'Gesture type' },
       args: { type: 'array', items: { type: 'string' }, description: 'Gesture args: tap(x,y), swipe(x1,y1,x2,y2), pinch(x,y,scale), longpress(x,y,[ms])' },
+      noSnap: P_NO_SNAP,
     }, ['target', 'gesture'], RW),
 
   tool('chromex_dialog',
-    'Handle JS dialogs (alert/confirm/prompt). Use "auto" to auto-accept all.',
+    'Handle JS dialogs (alert/confirm/prompt). Use "auto" to auto-accept all. Returns auto-snapshot with updated refs.',
     {
       target: P_TARGET,
       action: { type: 'string', enum: ['accept', 'dismiss', 'auto'], description: 'Dialog action' },
       text: { type: 'string', description: 'Text for prompt (only with accept)' },
+      noSnap: P_NO_SNAP,
     }, ['target', 'action'], RW),
 
   tool('chromex_loadall',
-    'Click "load more" button repeatedly until it disappears.',
+    'Click "load more" button repeatedly until it disappears. Returns auto-snapshot with updated refs.',
     {
       target: P_TARGET,
       selector: { type: 'string', description: 'CSS selector of load-more button' },
       interval: { type: 'number', description: 'Interval between clicks in ms (default: 1500)' },
+      noSnap: P_NO_SNAP,
     }, ['target', 'selector'], RW),
 
   // == FORMS ==
   tool('chromex_fill',
-    'Fill input/textarea. Handles React/Vue/Angular controlled inputs. Accepts @eN ref.',
+    'Fill input/textarea. Handles React/Vue/Angular controlled inputs. Accepts @eN ref. Returns auto-snapshot with updated refs.',
     {
       target: P_TARGET,
       selector: { type: 'string', description: 'CSS selector or @eN ref' },
       value: { type: 'string', description: 'Value to fill' },
+      noSnap: P_NO_SNAP,
     }, ['target', 'selector', 'value'], RW),
 
   tool('chromex_clear',
-    'Clear input field.',
+    'Clear input field. Returns auto-snapshot with updated refs.',
     {
       target: P_TARGET,
       selector: { type: 'string', description: 'CSS selector' },
+      noSnap: P_NO_SNAP,
     }, ['target', 'selector'], RW),
 
   tool('chromex_select',
-    'Select option in dropdown.',
+    'Select option in dropdown. Returns auto-snapshot with updated refs.',
     {
       target: P_TARGET,
       selector: { type: 'string', description: 'CSS selector of select element' },
       value: { type: 'string', description: 'Option value or visible text' },
+      noSnap: P_NO_SNAP,
     }, ['target', 'selector', 'value'], RW),
 
   tool('chromex_check',
-    'Toggle checkbox or radio button.',
+    'Toggle checkbox or radio button. Returns auto-snapshot with updated refs.',
     {
       target: P_TARGET,
       selector: { type: 'string', description: 'CSS selector' },
       checked: { type: 'boolean', description: 'Desired state (default: true)', default: true },
+      noSnap: P_NO_SNAP,
     }, ['target', 'selector'], RW),
 
   tool('chromex_form',
-    'Batch fill form. JSON maps selectors to values. Booleans toggle checkboxes.',
+    'Batch fill form. JSON maps selectors to values. Booleans toggle checkboxes. Returns auto-snapshot with updated refs.',
     {
       target: P_TARGET,
       fields: { type: 'string', description: 'JSON: {"#email":"user@test.com","#terms":true}' },
+      noSnap: P_NO_SNAP,
     }, ['target', 'fields'], RW),
 
   tool('chromex_upload',
-    'Upload file(s) to input[type=file].',
+    'Upload file(s) to input[type=file]. Returns auto-snapshot with updated refs.',
     {
       target: P_TARGET,
       selector: { type: 'string', description: 'CSS selector of file input' },
       files: { type: 'array', items: { type: 'string' }, description: 'File path(s)' },
+      noSnap: P_NO_SNAP,
     }, ['target', 'selector', 'files'], RW),
 
   // == DATA ==
@@ -630,6 +645,8 @@ async function executeTool(name, params) {
 
   const mapped = toolToCmd(name, params);
   if (!mapped) return fail(`Unknown tool: ${name}`);
+
+  if (params.noSnap) mapped.args.push('--no-snap');
 
   const conn = await getOrStartTabDaemon(targetId, config);
   const response = await sendCommand(conn, { cmd: mapped.cmd, args: mapped.args });
