@@ -13,15 +13,16 @@ import { evalStr, evalRawStr } from './commands/evaluate.mjs';
 import { shotStr } from './commands/screenshot.mjs';
 import { navStr } from './commands/navigate.mjs';
 import { htmlStr } from './commands/html.mjs';
-import { netStr } from './commands/network.mjs';
+import { netStr, netListStr, netDetailStr } from './commands/network.mjs';
 import { clickStr, clickXyStr, typeStr, loadAllStr, waitForStr } from './commands/interact.mjs';
 import { fillStr, clearStr, selectStr, checkStr, formStr } from './commands/form.mjs';
 import { scrollStr } from './commands/scroll.mjs';
 import { cookiesStr } from './commands/cookies.mjs';
 import { pdfStr } from './commands/pdf.mjs';
-import { consoleStr } from './commands/console.mjs';
+import { consoleStr, consoleListStr, consoleDetailStr } from './commands/console.mjs';
 import { storageStr } from './commands/storage.mjs';
-import { emulateStr } from './commands/emulate.mjs';
+import { emulateStr, resizeStr } from './commands/emulate.mjs';
+import { pressKeyStr } from './commands/keyboard.mjs';
 import { perfStr } from './commands/perf.mjs';
 // Tier 1
 import { waitLifecycleStr } from './commands/wait.mjs';
@@ -46,6 +47,8 @@ import { touchStr } from './commands/touch.mjs';
 import { domsnapshotStr } from './commands/domsnapshot.mjs';
 import { parseRef, clickRefStr, hoverRefStr, fillRefStr } from './commands/refs.mjs';
 import { highlightStr } from './commands/highlight.mjs';
+import { auditStr } from './commands/audit.mjs';
+import { SessionStats, statsStr } from './commands/stats.mjs';
 import { sleep } from './utils.mjs';
 
 // Commands that modify visible DOM and should trigger automatic post-action snapshot.
@@ -53,7 +56,7 @@ import { sleep } from './utils.mjs';
 // so the AI agent sees the page state without needing a separate snapshot call.
 const AUTO_SNAP_CMDS = new Set([
   'click', 'clickxy', 'type', 'fill', 'clear', 'select', 'check', 'form',
-  'nav', 'navigate', 'dialog', 'loadall', 'drag', 'touch', 'upload',
+  'nav', 'navigate', 'dialog', 'loadall', 'drag', 'touch', 'upload', 'key',
 ]);
 
 export function getOrCreateToken(config) {
@@ -118,9 +121,60 @@ export async function runDaemon(targetId, config) {
   // Per-tab state: ref map for @eN resolution + fingerprints for incremental diff
   let currentRefMap = new Map();
   let previousFingerprints = null;
+  const sessionStats = new SessionStats();
+
+  // Network request tracking (CDP Network domain) for detail drill-down
+  const networkRequests = new Map();
+  try {
+    await cdp.send('Network.enable', {}, sessionId);
+    cdp.onEvent('Network.requestWillBeSent', (params) => {
+      networkRequests.set(params.requestId, {
+        url: params.request.url,
+        method: params.request.method,
+        requestHeaders: params.request.headers,
+        type: params.type,
+        ts: params.timestamp,
+      });
+      if (networkRequests.size > 500) networkRequests.delete(networkRequests.keys().next().value);
+    });
+    cdp.onEvent('Network.responseReceived', (params) => {
+      const r = networkRequests.get(params.requestId);
+      if (r) {
+        r.status = params.response.status;
+        r.statusText = params.response.statusText;
+        r.responseHeaders = params.response.headers;
+        r.timing = params.response.timing;
+        r.mimeType = params.response.mimeType;
+      }
+    });
+  } catch { /* Network domain unavailable */ }
+
+  // Console message tracking for list/detail drill-down
+  const consoleMessages = [];
+  try {
+    await cdp.send('Runtime.enable', {}, sessionId);
+    cdp.onEvent('Runtime.consoleAPICalled', (params) => {
+      consoleMessages.push({
+        id: consoleMessages.length,
+        ts: Date.now(),
+        type: params.type,
+        args: (params.args || []).map(a => {
+          if (a.type === 'string') return a.value;
+          if (a.type === 'number') return String(a.value);
+          if (a.type === 'boolean') return String(a.value);
+          if (a.type === 'undefined') return 'undefined';
+          if (a.subtype === 'null') return 'null';
+          return a.description || JSON.stringify(a.value) || `[${a.type}]`;
+        }),
+        stackTrace: params.stackTrace,
+      });
+      if (consoleMessages.length > 1000) consoleMessages.splice(0, 500);
+    });
+  } catch { /* Runtime domain unavailable */ }
 
   async function handleCommand({ cmd, args }) {
     resetIdle();
+    const startMs = Date.now();
     const auditResult = { ok: true };
     try {
       // Strip --no-snap before dispatch so it doesn't contaminate command args
@@ -135,8 +189,9 @@ export async function runDaemon(targetId, config) {
       if (args[0] && parseRef(args[0]) !== null) {
         isRefCmd = true;
         const refNum = parseRef(args[0]);
+        const dbl = args.includes('--dbl');
         if (cmd === 'click') {
-          result = await clickRefStr(cdp, sessionId, currentRefMap, refNum);
+          result = await clickRefStr(cdp, sessionId, currentRefMap, refNum, dbl);
         } else if (cmd === 'fill') {
           result = await fillRefStr(cdp, sessionId, currentRefMap, refNum, args.slice(1).join(' '));
         } else if (cmd === 'hover') {
@@ -177,26 +232,56 @@ export async function runDaemon(targetId, config) {
           break;
         case 'shot': case 'screenshot': {
           const full = args.includes('--full');
-          const file = args.find(a => a && a !== '--full');
-          result = await shotStr(cdp, sessionId, file, full, config);
+          const formatArg = args.find(a => a.startsWith('--format='));
+          const qualityArg = args.find(a => a.startsWith('--quality='));
+          const refArg = args.find(a => a && a.startsWith('@e'));
+          const file = args.find(a => a && !a.startsWith('--') && !a.startsWith('@e'));
+          const options = {};
+          if (formatArg) options.format = formatArg.split('=')[1];
+          if (qualityArg) options.quality = parseInt(qualityArg.split('=')[1]);
+          if (refArg) {
+            const refNum = parseInt(refArg.slice(2));
+            if (!isNaN(refNum)) {
+              options.refMap = currentRefMap;
+              options.refNum = refNum;
+            }
+          }
+          result = await shotStr(cdp, sessionId, file, full, config, options);
           break;
         }
         case 'html':
           result = await htmlStr(cdp, sessionId, args[0]);
           break;
-        case 'nav': case 'navigate':
+        case 'nav': case 'navigate': {
+          const navAction = args[0]?.toLowerCase();
           result = await navStr(cdp, sessionId, args[0], config);
-          previousFingerprints = null; // Reset: new page needs full snapshot
+          // Reset fingerprints for URL navigation and reload (new content)
+          if (navAction !== 'back' && navAction !== 'forward') {
+            previousFingerprints = null;
+          }
           break;
+        }
         case 'net': case 'network':
-          result = await netStr(cdp, sessionId);
+          if (args[0]) {
+            result = await netDetailStr(cdp, sessionId, args[0], networkRequests);
+          } else if (networkRequests.size > 0) {
+            result = netListStr(networkRequests);
+          } else {
+            result = await netStr(cdp, sessionId);
+          }
           break;
-        case 'click':
-          result = await clickStr(cdp, sessionId, args[0]);
+        case 'click': {
+          const dbl = args.includes('--dbl');
+          const sel = args.filter(a => a !== '--dbl')[0];
+          result = await clickStr(cdp, sessionId, sel, dbl);
           break;
-        case 'clickxy':
-          result = await clickXyStr(cdp, sessionId, args[0], args[1]);
+        }
+        case 'clickxy': {
+          const dbl = args.includes('--dbl');
+          const xyArgs = args.filter(a => a !== '--dbl');
+          result = await clickXyStr(cdp, sessionId, xyArgs[0], xyArgs[1], dbl);
           break;
+        }
         case 'type':
           result = await typeStr(cdp, sessionId, args[0]);
           break;
@@ -234,9 +319,17 @@ export async function runDaemon(targetId, config) {
         case 'pdf':
           result = await pdfStr(cdp, sessionId, args[0]);
           break;
-        case 'console':
-          result = await consoleStr(cdp, sessionId, args[0]);
+        case 'console': {
+          const sub = args[0]?.toLowerCase();
+          if (sub === 'list') {
+            result = consoleListStr(consoleMessages);
+          } else if (sub === 'detail' && args[1]) {
+            result = consoleDetailStr(consoleMessages, args[1]);
+          } else {
+            result = await consoleStr(cdp, sessionId, args[0]);
+          }
           break;
+        }
         case 'storage':
           result = await storageStr(cdp, sessionId, args[0]);
           break;
@@ -324,6 +417,29 @@ export async function runDaemon(targetId, config) {
         case 'highlight':
           result = await highlightStr(cdp, sessionId, args[0]);
           break;
+        case 'key':
+          result = await pressKeyStr(cdp, sessionId, args[0]);
+          break;
+        case 'resize':
+          result = await resizeStr(cdp, sessionId, args[0], args[1], args[2]);
+          break;
+        case 'audit':
+          result = await auditStr(cdp, sessionId, args[0], args[1], args[2]);
+          break;
+        case 'stats': {
+          const isFull = args.includes('--full');
+          const exportArg = args.find(a => a.startsWith('--export='));
+          const exportPath = exportArg ? exportArg.split('=')[1] : null;
+          if (args.includes('--reset')) {
+            sessionStats.commands.clear();
+            sessionStats.timeline.length = 0;
+            sessionStats.startTime = Date.now();
+            result = 'Session stats reset.';
+          } else {
+            result = statsStr(sessionStats, isFull, exportPath);
+          }
+          break;
+        }
         case 'hover':
           throw new Error('hover requires a ref (@eN). Run "snap --refs" first, then "hover @e5".');
         case 'stop': {
@@ -360,10 +476,12 @@ export async function runDaemon(targetId, config) {
         } catch (e) { process.stderr.write(`[auto-snap] ${e.message}\n`); }
       }
 
+      sessionStats.record(cmd, args, startMs, Date.now(), true, null);
       return { ok: true, result: result ?? '' };
     } catch (e) {
       auditResult.ok = false;
       audit(cmd, targetId, args, auditResult, config);
+      sessionStats.record(cmd, args, startMs, Date.now(), false, e.message);
       return { ok: false, error: e.message };
     }
   }

@@ -42,3 +42,18 @@ export async function emulateStr(cdp, sid, device) {
 
   return `Emulating ${device}: ${preset.width}x${preset.height} @${preset.deviceScaleFactor}x${preset.mobile ? ' (mobile)' : ''}`;
 }
+
+export async function resizeStr(cdp, sid, widthStr, heightStr, dprStr) {
+  const width = parseInt(widthStr);
+  const height = parseInt(heightStr);
+  if (!width || !height || width < 1 || height < 1) {
+    throw new Error('Width and height required (e.g. resize 1280 720)');
+  }
+  const dpr = dprStr ? parseFloat(dprStr) : 1;
+
+  await cdp.send('Emulation.setDeviceMetricsOverride', {
+    width, height, deviceScaleFactor: dpr, mobile: false,
+  }, sid);
+
+  return `Viewport resized to ${width}x${height} @${dpr}x`;
+}

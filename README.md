@@ -1,10 +1,10 @@
 # Chromex
 
-Zero-dependency Chrome DevTools Protocol toolkit for AI agents. 52 typed MCP tools + CLI. Connects directly to Chrome, Brave, Edge, or Chromium via WebSocket. No Puppeteer, no bloat.
+Zero-dependency Chrome DevTools Protocol toolkit for AI agents. 56 typed MCP tools + CLI. Connects directly to Chrome, Brave, Edge, or Chromium via WebSocket. No Puppeteer, no bloat.
 
 ## Features
 
-- **52 MCP tools** -- typed JSON Schema, annotations (`readOnlyHint`, `destructiveHint`), inline screenshots (base64)
+- **56 MCP tools** -- typed JSON Schema, annotations (`readOnlyHint`, `destructiveHint`), inline screenshots (base64)
 - **Zero dependencies** -- uses only Node.js 22+ built-in modules (WebSocket, fs, net, crypto)
 - **Ref-based selection** -- `snap --refs` assigns `@e1`, `@e2`... to interactive elements, then `click @e5` or `fill @e3 "value"`. No fragile CSS selectors
 - **Incremental snapshots** -- second snapshot returns only changed nodes (diff), reducing output from thousands of lines to just what changed
@@ -45,7 +45,7 @@ Add to `~/.claude/settings.json`:
 }
 ```
 
-This approves all 52 MCP tools at once. For granular control, approve individual tools:
+This approves all 56 MCP tools at once. For granular control, approve individual tools:
 
 ```json
 {
@@ -141,6 +141,10 @@ chromex close  <target>                            # Close tab
 chromex focus  <target>                            # Activate/focus tab
 chromex launch                                     # Launch browser with debugging
 chromex launch --incognito --browser brave          # Launch Brave in incognito
+chromex launch --headless --url https://example.com # Headless mode for CI/CD
+chromex launch --proxy socks5://localhost:1080      # Launch with proxy
+chromex launch --insecure                           # Ignore certificate errors
+chromex launch --chrome-arg --disable-web-security  # Pass custom Chrome flag
 chromex launch --profile testing --url https://...  # Isolated profile + URL
 chromex incognito https://example.com               # Isolated context (no relaunch)
 chromex stop                                        # Stop all daemons
@@ -156,9 +160,14 @@ chromex snap    <target> --full             # Force full snapshot (skip diff)
 chromex html    <target> "#main"            # Element HTML by selector
 chromex shot    <target> /tmp/page.png      # Viewport screenshot
 chromex shot    <target> /tmp/full.png --full  # Full page screenshot
-chromex net     <target>                    # Network resource timing
+chromex shot    <target> --format=jpeg --quality=80  # JPEG/WebP with quality control
+chromex shot    <target> @e5               # Screenshot of specific element by ref
+chromex net     <target>                    # List network requests (CDP tracked)
+chromex net     <target> <requestId>        # Request detail: headers, timing, body
 chromex perf    <target>                    # Core Web Vitals + memory + DOM stats
 chromex console <target> 5000               # Capture console.log/error for 5s
+chromex console <target> list               # Show stored messages since daemon start
+chromex console <target> detail <id>        # Message detail with stack trace
 chromex domsnapshot <target>                # Structured DOM with bounding rects
 chromex domsnapshot <target> --styles       # Include computed styles
 chromex highlight <target> "h1"             # Highlight element with overlay
@@ -178,6 +187,10 @@ chromex evalraw <target> "Page.getLayoutMetrics"                   # Layout info
 
 ```bash
 chromex nav     <target> "https://example.com"    # Navigate + wait for load
+chromex nav     <target> back                      # Go back in history
+chromex nav     <target> forward                   # Go forward in history
+chromex nav     <target> reload                    # Reload page
+chromex nav     <target> reload-hard               # Reload ignoring cache
 chromex waitfor <target> ".results" 10000          # Wait for CSS selector (10s)
 chromex wait    <target> networkidle               # Wait for network idle
 chromex wait    <target> load                      # Wait for page load
@@ -195,7 +208,12 @@ chromex scroll  <target> to "#footer"              # Scroll to element
 ```bash
 chromex click   <target> "button.submit"           # Click by CSS selector
 chromex click   <target> @e5                       # Click by ref (from snap --refs)
+chromex click   <target> @e5 --dbl                 # Double-click
 chromex clickxy <target> 100 200                   # Click at CSS pixel coords
+chromex clickxy <target> 100 200 --dbl             # Double-click at coords
+chromex key     <target> Enter                     # Press key
+chromex key     <target> "Control+A"               # Key combination
+chromex key     <target> "Control+Shift+R"         # Multi-modifier combo
 chromex type    <target> "hello world"             # Type text (works cross-origin)
 chromex hover   <target> @e12                      # Hover element by ref
 chromex drag    <target> "#source" "#dest"         # Drag & drop by selector
@@ -268,6 +286,8 @@ chromex emulate  <target> macbook-air              # 1440x900 @2x laptop
 chromex emulate  <target> desktop-1080p            # 1920x1080 @1x
 chromex emulate  <target> desktop-4k               # 3840x2160 @1x
 chromex emulate  <target> reset                    # Reset to default
+chromex resize   <target> 1280 720                 # Custom viewport dimensions
+chromex resize   <target> 1440 900 2               # Custom with DPR (retina)
 chromex geo      <target> -23.55 -46.63            # Set geolocation (Sao Paulo)
 chromex geo      <target> reset                    # Clear geolocation
 chromex timezone <target> "America/Sao_Paulo"      # Set timezone
@@ -293,6 +313,18 @@ chromex heap     <target> snapshot /tmp/heap.hs    # Heap snapshot (memory analy
 chromex webauthn <target> enable                   # Virtual authenticator (passkeys)
 chromex webauthn <target> creds                    # List stored credentials
 chromex webauthn <target> disable                  # Remove authenticator
+```
+
+### Audit & Analytics
+
+```bash
+chromex audit   <target>                           # Full Lighthouse audit (all categories)
+chromex audit   <target> performance,seo           # Specific categories
+chromex audit   <target> accessibility desktop     # Accessibility on desktop
+chromex stats   <target>                           # Session analytics (command counts, timing)
+chromex stats   <target> --full                    # Full action timeline
+chromex stats   <target> --reset                   # Reset counters
+chromex stats   <target> --export=/tmp/stats.json  # Export as JSON
 ```
 
 ## Ref-Based Selection
@@ -379,7 +411,7 @@ chromex click <target> @e3
 #   ...
 ```
 
-Commands that trigger auto-snapshot: `click`, `clickxy`, `type`, `fill`, `clear`, `select`, `check`, `form`, `nav`, `dialog`, `loadall`, `drag`, `touch`, `upload`.
+Commands that trigger auto-snapshot: `click`, `clickxy`, `type`, `key`, `fill`, `clear`, `select`, `check`, `form`, `nav`, `dialog`, `loadall`, `drag`, `touch`, `upload`.
 
 Suppress with `--no-snap` for scripts doing rapid sequential actions:
 

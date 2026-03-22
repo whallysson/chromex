@@ -14,7 +14,7 @@ import { launchBrowser, incognitoContext } from './lib/launcher.mjs';
 import { openTabStr, closeTabStr, focusTabStr } from './lib/commands/tab.mjs';
 
 const config = loadConfig();
-const SERVER_INFO = { name: 'chromex', version: '1.0.0' };
+const SERVER_INFO = { name: 'chromex', version: '1.4.0' };
 
 // ---- JSON-RPC helpers ----
 
@@ -56,7 +56,7 @@ function tool(name, description, properties, required, annotations) {
 const P_TARGET = { type: 'string', description: 'Target ID prefix from chromex_list' };
 const P_NO_SNAP = { type: 'boolean', description: 'Skip auto-snapshot after action' };
 
-// ---- Tool definitions (52 tools) ----
+// ---- Tool definitions (56 tools) ----
 
 const TOOLS = [
   // == PAGES (no daemon) ==
@@ -65,12 +65,16 @@ const TOOLS = [
     {}, [], RO),
 
   tool('chromex_launch',
-    'Launch browser with remote debugging enabled. Recommended over manual chrome://inspect setup.',
+    'Launch browser with remote debugging enabled. Supports headless, proxy, insecure certs, and custom Chrome flags.',
     {
       incognito: { type: 'boolean', description: 'Launch in incognito mode' },
       browser: { type: 'string', enum: ['chrome', 'brave', 'edge', 'chromium', 'chrome-canary', 'vivaldi'], description: 'Browser to launch' },
       profile: { type: 'string', description: 'Named profile directory' },
       url: { type: 'string', description: 'URL to open on launch' },
+      headless: { type: 'boolean', description: 'Launch in headless mode (no UI)' },
+      proxy: { type: 'string', description: 'Proxy server (e.g. socks5://localhost:1080)' },
+      insecure: { type: 'boolean', description: 'Ignore certificate errors' },
+      chromeArgs: { type: 'array', items: { type: 'string' }, description: 'Additional Chrome flags to pass through' },
     }, [], RW),
 
   tool('chromex_open',
@@ -114,26 +118,34 @@ const TOOLS = [
     }, ['target'], RO),
 
   tool('chromex_screenshot',
-    'Take PNG screenshot. Returns inline image + file path. Image px = CSS px * DPR.',
+    'Take screenshot. Supports PNG/JPEG/WebP, full page, and element capture by @eN ref. Returns inline image + file path.',
     {
       target: P_TARGET,
       filePath: { type: 'string', description: 'Output path (default: /tmp/screenshot.png)' },
       fullPage: { type: 'boolean', description: 'Capture full page', default: false },
+      format: { type: 'string', enum: ['png', 'jpeg', 'webp'], description: 'Image format (default: png)' },
+      quality: { type: 'number', description: 'Compression quality 0-100 (JPEG/WebP only)' },
+      ref: { type: 'string', description: 'Element ref @eN to capture (requires snap --refs first)' },
     }, ['target'], RO),
 
   tool('chromex_network',
-    'Get resource timing / network performance entries.',
-    { target: P_TARGET }, ['target'], RO),
+    'Network requests. Without requestId: list captured requests (status, method, URL). With requestId: full detail (headers, timing, response body).',
+    {
+      target: P_TARGET,
+      requestId: { type: 'string', description: 'Request ID for detail drill-down (from chromex_network listing)' },
+    }, ['target'], RO),
 
   tool('chromex_perf',
     'Core Web Vitals (LCP, FCP, CLS, TTFB), navigation timing, memory, DOM metrics.',
     { target: P_TARGET }, ['target'], RO),
 
   tool('chromex_console',
-    'Capture console output (log/error/warn) for a duration.',
+    'Console messages. Default: live capture for duration. "list": stored messages since daemon start. "detail": full message with stack trace.',
     {
       target: P_TARGET,
-      duration: { type: 'number', description: 'Capture duration in ms (default: 5000)' },
+      action: { type: 'string', enum: ['capture', 'list', 'detail'], description: 'Action (default: capture)' },
+      duration: { type: 'number', description: 'Capture duration in ms (default: 5000, for capture action)' },
+      messageId: { type: 'number', description: 'Message ID for detail action' },
     }, ['target'], RO),
 
   tool('chromex_domsnapshot',
@@ -168,10 +180,10 @@ const TOOLS = [
 
   // == NAVIGATE ==
   tool('chromex_navigate',
-    'Navigate to URL and wait for page load. Returns full snapshot with refs of the new page.',
+    'Navigate to URL, back, forward, or reload. Returns snapshot with refs of the resulting page.',
     {
       target: P_TARGET,
-      url: { type: 'string', description: 'URL to navigate to' },
+      url: { type: 'string', description: 'URL, or action: "back", "forward", "reload", "reload-hard"' },
       noSnap: P_NO_SNAP,
     }, ['target', 'url'], RW),
 
@@ -201,19 +213,21 @@ const TOOLS = [
 
   // == INTERACT ==
   tool('chromex_click',
-    'Click element by CSS selector or @eN ref from snapshot. Returns auto-snapshot with updated refs.',
+    'Click element by CSS selector or @eN ref. Supports double-click. Returns auto-snapshot with updated refs.',
     {
       target: P_TARGET,
       selector: { type: 'string', description: 'CSS selector or @eN ref' },
+      dblClick: { type: 'boolean', description: 'Double-click instead of single click', default: false },
       noSnap: P_NO_SNAP,
     }, ['target', 'selector'], RW),
 
   tool('chromex_clickxy',
-    'Click at CSS pixel coordinates. Returns auto-snapshot with updated refs.',
+    'Click at CSS pixel coordinates. Supports double-click. Returns auto-snapshot with updated refs.',
     {
       target: P_TARGET,
       x: { type: 'number', description: 'X in CSS pixels' },
       y: { type: 'number', description: 'Y in CSS pixels' },
+      dblClick: { type: 'boolean', description: 'Double-click instead of single click', default: false },
       noSnap: P_NO_SNAP,
     }, ['target', 'x', 'y'], RW),
 
@@ -258,6 +272,14 @@ const TOOLS = [
       text: { type: 'string', description: 'Text for prompt (only with accept)' },
       noSnap: P_NO_SNAP,
     }, ['target', 'action'], RW),
+
+  tool('chromex_press_key',
+    'Press key or key combination. For form submission (Enter), closing modals (Escape), keyboard shortcuts (Control+A), tab navigation (Tab). Returns auto-snapshot with updated refs.',
+    {
+      target: P_TARGET,
+      key: { type: 'string', description: 'Key or combination: "Enter", "Tab", "Escape", "Control+A", "Control+Shift+R", "Meta+C"' },
+      noSnap: P_NO_SNAP,
+    }, ['target', 'key'], RW),
 
   tool('chromex_loadall',
     'Click "load more" button repeatedly until it disappears. Returns auto-snapshot with updated refs.',
@@ -410,6 +432,15 @@ const TOOLS = [
       rate: { type: 'string', description: 'Throttle rate or "reset"' },
     }, ['target', 'rate'], RW),
 
+  tool('chromex_resize',
+    'Resize viewport to custom dimensions (without device preset emulation).',
+    {
+      target: P_TARGET,
+      width: { type: 'number', description: 'Viewport width in pixels' },
+      height: { type: 'number', description: 'Viewport height in pixels' },
+      dpr: { type: 'number', description: 'Device pixel ratio (default: 1)' },
+    }, ['target', 'width', 'height'], RW),
+
   // == ADVANCED ==
   tool('chromex_inject',
     'Inject JS on every page navigation. Use --file, --remove, --list, or inline script.',
@@ -455,6 +486,24 @@ const TOOLS = [
       target: P_TARGET,
       action: { type: 'string', enum: ['enable', 'creds', 'disable'], description: 'Enable, list credentials, or disable' },
     }, ['target', 'action'], RW),
+
+  tool('chromex_audit',
+    'Run Lighthouse audit (performance, accessibility, SEO, best-practices). Requires lighthouse installed (npx installs on demand).',
+    {
+      target: P_TARGET,
+      categories: { type: 'string', description: 'Comma-separated: performance,accessibility,seo,best-practices (default: all)' },
+      device: { type: 'string', enum: ['mobile', 'desktop'], description: 'Device preset (default: mobile)' },
+      reportPath: { type: 'string', description: 'Path to save full HTML report' },
+    }, ['target'], RO),
+
+  tool('chromex_stats',
+    'Session analytics: command counts, average timing, error rates, action timeline. All data is local, never sent externally.',
+    {
+      target: P_TARGET,
+      full: { type: 'boolean', description: 'Show full timeline instead of last 20 entries' },
+      exportPath: { type: 'string', description: 'Export stats as JSON to file path' },
+      reset: { type: 'boolean', description: 'Reset all counters' },
+    }, ['target'], RO),
 ];
 
 // ---- Tool name -> daemon {cmd, args} mapping ----
@@ -472,13 +521,20 @@ function toolToCmd(name, p) {
     case 'chromex_html':       return { cmd: 'html', args: p.selector ? [p.selector] : [] };
     case 'chromex_screenshot': {
       const a = [];
+      if (p.ref) a.push(p.ref);
       if (p.filePath) a.push(p.filePath);
       if (p.fullPage) a.push('--full');
+      if (p.format) a.push(`--format=${p.format}`);
+      if (p.quality != null) a.push(`--quality=${p.quality}`);
       return { cmd: 'shot', args: a };
     }
-    case 'chromex_network':    return { cmd: 'net', args: [] };
+    case 'chromex_network':    return { cmd: 'net', args: p.requestId ? [p.requestId] : [] };
     case 'chromex_perf':       return { cmd: 'perf', args: [] };
-    case 'chromex_console':    return { cmd: 'console', args: p.duration != null ? [String(p.duration)] : [] };
+    case 'chromex_console': {
+      if (p.action === 'list') return { cmd: 'console', args: ['list'] };
+      if (p.action === 'detail') return { cmd: 'console', args: ['detail', String(p.messageId ?? '')] };
+      return { cmd: 'console', args: p.duration != null ? [String(p.duration)] : [] };
+    }
     case 'chromex_domsnapshot': return { cmd: 'domsnapshot', args: p.styles ? ['--styles'] : [] };
     case 'chromex_highlight':  return { cmd: 'highlight', args: [p.selector] };
 
@@ -493,8 +549,9 @@ function toolToCmd(name, p) {
     case 'chromex_scroll':     return { cmd: 'scroll', args: p.amount != null ? [p.direction, p.amount] : [p.direction] };
 
     // Interact
-    case 'chromex_click':      return { cmd: 'click', args: [p.selector] };
-    case 'chromex_clickxy':    return { cmd: 'clickxy', args: [String(p.x), String(p.y)] };
+    case 'chromex_click':      return { cmd: 'click', args: p.dblClick ? [p.selector, '--dbl'] : [p.selector] };
+    case 'chromex_clickxy':    return { cmd: 'clickxy', args: p.dblClick ? [String(p.x), String(p.y), '--dbl'] : [String(p.x), String(p.y)] };
+    case 'chromex_press_key':  return { cmd: 'key', args: [p.key] };
     case 'chromex_type':       return { cmd: 'type', args: [p.text] };
     case 'chromex_hover':      return { cmd: 'hover', args: [p.ref] };
     case 'chromex_drag':       return { cmd: 'drag', args: [p.from, p.to] };
@@ -531,6 +588,7 @@ function toolToCmd(name, p) {
     case 'chromex_timezone':   return { cmd: 'timezone', args: [p.timezone] };
     case 'chromex_locale':     return { cmd: 'locale', args: [p.locale] };
     case 'chromex_cpu':        return { cmd: 'cpu', args: [p.rate] };
+    case 'chromex_resize':     return { cmd: 'resize', args: p.dpr ? [String(p.width), String(p.height), String(p.dpr)] : [String(p.width), String(p.height)] };
 
     // Advanced
     case 'chromex_inject':     return { cmd: 'inject', args: p.arg ? [p.action, p.arg] : [p.action] };
@@ -539,6 +597,14 @@ function toolToCmd(name, p) {
     case 'chromex_trace':      return { cmd: 'trace', args: p.arg ? [p.action, p.arg] : [p.action] };
     case 'chromex_heap':       return { cmd: 'heap', args: p.filePath ? ['snapshot', p.filePath] : ['snapshot'] };
     case 'chromex_webauthn':   return { cmd: 'webauthn', args: [p.action] };
+    case 'chromex_audit':      return { cmd: 'audit', args: [p.categories || '', p.device || '', p.reportPath || ''].filter(Boolean) };
+    case 'chromex_stats': {
+      const a = [];
+      if (p.full) a.push('--full');
+      if (p.reset) a.push('--reset');
+      if (p.exportPath) a.push(`--export=${p.exportPath}`);
+      return { cmd: 'stats', args: a };
+    }
 
     default: return null;
   }
@@ -660,7 +726,9 @@ async function executeTool(name, params) {
     const screenshotPath = (response.result.split('\n')[0] || '').trim();
     if (screenshotPath && existsSync(screenshotPath)) {
       const imageData = readFileSync(screenshotPath).toString('base64');
-      return okWithImage(response.result, imageData);
+      const ext = screenshotPath.split('.').pop()?.toLowerCase();
+      const mimeMap = { png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', webp: 'image/webp' };
+      return okWithImage(response.result, imageData, mimeMap[ext] || 'image/png');
     }
   }
 

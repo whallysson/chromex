@@ -27,7 +27,7 @@ const NEEDS_TARGET = new Set([
   'intercept', 'har', 'coverage',
   // Tier 3
   'trace', 'heap', 'webauthn', 'drag', 'touch', 'domsnapshot', 'highlight',
-  'hover',
+  'hover', 'key', 'resize', 'audit', 'stats',
 ]);
 
 const USAGE = `chromex - Chrome DevTools Protocol CLI for AI agents
@@ -44,15 +44,25 @@ Usage: chromex <command> [args]
       --browser chrome|brave|edge       Choose browser
       --profile NAME                    Use named profile
       --url URL                         Open URL on launch
+      --headless                        Launch in headless mode (no UI)
+      --proxy PROXY                     Proxy server (e.g. socks5://localhost:1080)
+      --insecure                        Ignore certificate errors
+      --chrome-arg FLAG                 Pass custom Chrome flag (e.g. --chrome-arg --disable-web-security)
     incognito [url]                     Create isolated browser context (no relaunch)
 
   INSPECT
     snap    <target>                    Accessibility tree snapshot (compact)
     html    <target> [selector]         Get HTML (full page or CSS selector)
-    shot    <target> [file] [--full]    Screenshot (viewport or full page)
-    net     <target>                    Network performance entries
+    shot    <target> [file] [options]   Screenshot (viewport, full page, or element)
+      --full                            Full page capture
+      --format=jpeg|webp|png            Image format (default: png)
+      --quality=N                       Compression quality 0-100 (JPEG/WebP)
+      @eN                               Capture specific element by ref
+    net     <target> [requestId]        Network requests list, or detail by request ID
     perf    <target>                    Core Web Vitals + performance metrics
     console <target> [duration_ms]      Capture console output (default 5000ms)
+    console <target> list               Show stored messages since daemon start
+    console <target> detail <id>        Message detail with stack trace
     domsnapshot <target> [--styles]     Structured DOM snapshot with bounding rects
     highlight <target> <sel|clear>      Highlight element with overlay
 
@@ -61,14 +71,15 @@ Usage: chromex <command> [args]
     evalraw <target> <method> [json]    Raw CDP command (some methods blocked)
 
   NAVIGATE
-    nav     <target> <url>              Navigate to URL and wait for load
+    nav     <target> <url|action>        Navigate: URL, back, forward, reload, reload-hard
     waitfor <target> <selector> [ms]    Wait for CSS selector to appear
     wait    <target> <event> [ms]       Wait for: networkidle, load, domready, fcp
     scroll  <target> <dir> [amount]     Scroll: up, down, top, bottom, to <selector>
 
   INTERACT
-    click   <target> <selector>         Click element by CSS selector
-    clickxy <target> <x> <y>            Click at CSS pixel coordinates
+    click   <target> <selector> [--dbl]  Click element (supports double-click)
+    clickxy <target> <x> <y> [--dbl]   Click at coordinates (supports double-click)
+    key     <target> <combo>            Press key: Enter, Tab, Escape, Control+A, Meta+C
     type    <target> <text>             Type text at current focus
     drag    <target> <from> <to>        Drag & drop (selectors or x1,y1 x2,y2)
     touch   <target> <gesture> [args]   Touch: tap, swipe, pinch, longpress
@@ -99,6 +110,7 @@ Usage: chromex <command> [args]
     timezone <target> <tz|reset>        Set timezone (e.g. America/Sao_Paulo)
     locale  <target> <locale|reset>     Set locale (e.g. pt-BR)
     cpu     <target> <rate|reset>       CPU throttle (1=normal, 4=4x slower, 6=mobile)
+    resize  <target> <w> <h> [dpr]     Resize viewport to custom dimensions
 
   ADVANCED
     inject  <target> <script|flags>     Inject JS on every page load (--file, --remove, --list)
@@ -107,6 +119,13 @@ Usage: chromex <command> [args]
     trace   <target> start|stop [file]  Performance trace (chrome://tracing format)
     heap    <target> snapshot [file]     Heap snapshot for memory analysis
     webauthn <target> enable|creds|dis  Virtual authenticator for passkey testing
+
+  AUDIT
+    audit   <target> [categories] [device]  Lighthouse audit (performance, accessibility, SEO)
+      categories: performance,accessibility,seo,best-practices
+      device: mobile (default) or desktop
+    stats   <target> [--full] [--reset] Session analytics (command counts, timing, errors)
+      --export=/path/to/stats.json      Export as JSON
 
   DAEMON
     stop    [target]                    Stop daemon(s)
@@ -166,7 +185,8 @@ async function main() {
 
   // Launch
   if (cmd === 'launch') {
-    const options = parseFlags(args, ['incognito'], ['browser', 'profile', 'url']);
+    const options = parseFlags(args, ['incognito', 'headless', 'insecure'], ['browser', 'profile', 'url', 'proxy', 'chrome-arg']);
+    if (options['chrome-arg']) { options.chromeArgs = [options['chrome-arg']]; delete options['chrome-arg']; }
     const result = await launchBrowser(options);
     console.log(result);
     return;

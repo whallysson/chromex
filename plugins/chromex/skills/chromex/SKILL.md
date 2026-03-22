@@ -6,7 +6,7 @@ version: 1.0.0
 
 # Chromex -- Chrome DevTools Protocol CLI
 
-Zero-dependency CDP CLI for AI agents. Connects to Chrome/Brave/Edge via WebSocket. Per-tab persistent daemons, security hardened, 25+ commands.
+Zero-dependency CDP CLI for AI agents. Connects to Chrome/Brave/Edge via WebSocket. Per-tab persistent daemons, security hardened, 56 MCP tools.
 
 ## Prerequisites
 
@@ -43,6 +43,10 @@ chromex.mjs open    <url>                           # open new tab
 chromex.mjs close   <target>                        # close tab
 chromex.mjs focus   <target>                        # activate/focus tab
 chromex.mjs launch  [--incognito] [--browser NAME]  # launch browser with debugging
+chromex.mjs launch  --headless --url URL            # headless mode for CI/CD
+chromex.mjs launch  --proxy socks5://host:port      # launch with proxy
+chromex.mjs launch  --insecure                      # ignore certificate errors
+chromex.mjs launch  --chrome-arg FLAG               # pass custom Chrome flag
 chromex.mjs incognito [url]                         # isolated context (no relaunch)
 chromex.mjs stop    [target]                        # stop daemon(s)
 ```
@@ -56,9 +60,14 @@ chromex.mjs snap    <target> --refs --full      # force full snapshot (skip diff
 chromex.mjs snap    <target> --depth=2          # limit tree depth
 chromex.mjs html    <target> [selector]         # full page or element HTML
 chromex.mjs shot    <target> [file] [--full]    # screenshot (viewport or full page)
-chromex.mjs net     <target>                    # resource timing entries
+chromex.mjs shot    <target> --format=jpeg --quality=80  # JPEG/WebP with quality
+chromex.mjs shot    <target> @e5               # screenshot of specific element by ref
+chromex.mjs net     <target>                    # list network requests (CDP tracked)
+chromex.mjs net     <target> <requestId>        # request detail: headers, timing, body
 chromex.mjs perf    <target>                    # Core Web Vitals + memory + DOM
-chromex.mjs console <target> [ms]               # capture console output
+chromex.mjs console <target> [ms]               # capture console output (live, default 5s)
+chromex.mjs console <target> list               # stored messages since daemon start
+chromex.mjs console <target> detail <id>        # message detail with stack trace
 chromex.mjs domsnapshot <target> [--styles]     # structured DOM with bounding rects
 chromex.mjs highlight <target> <sel|clear>      # highlight element with overlay
 ```
@@ -74,6 +83,10 @@ chromex.mjs evalraw <target> <method> [json]    # raw CDP command
 
 ```bash
 chromex.mjs nav     <target> <url>              # navigate and wait for load
+chromex.mjs nav     <target> back               # go back in history
+chromex.mjs nav     <target> forward            # go forward in history
+chromex.mjs nav     <target> reload             # reload page
+chromex.mjs nav     <target> reload-hard        # reload ignoring cache
 chromex.mjs waitfor <target> <selector> [ms]    # wait for CSS selector
 chromex.mjs wait    <target> <event> [ms]       # wait for: networkidle, load, domready, fcp
 chromex.mjs scroll  <target> <dir> [amount]     # scroll: up, down, top, bottom, to <sel>
@@ -83,7 +96,9 @@ chromex.mjs scroll  <target> <dir> [amount]     # scroll: up, down, top, bottom,
 
 ```bash
 chromex.mjs click   <target> <selector|@eN>     # click by selector or ref
-chromex.mjs clickxy <target> <x> <y>            # click at CSS pixel coords
+chromex.mjs click   <target> @e5 --dbl          # double-click by ref
+chromex.mjs clickxy <target> <x> <y> [--dbl]   # click at CSS pixel coords
+chromex.mjs key     <target> <combo>            # press key: Enter, Tab, Escape, Control+A
 chromex.mjs type    <target> <text>             # type text (works cross-origin)
 chromex.mjs hover   <target> @eN                # hover by ref
 chromex.mjs drag    <target> <from> <to>        # drag & drop (selectors or coords)
@@ -123,6 +138,7 @@ chromex.mjs har     <target> start|stop [file]  # record HTTP traffic as HAR
 
 ```bash
 chromex.mjs emulate  <target> <device|reset>    # iphone-14, pixel-7, ipad-pro, etc.
+chromex.mjs resize   <target> <w> <h> [dpr]    # custom viewport dimensions
 chromex.mjs geo      <target> <lat> <lon>|reset # geolocation override
 chromex.mjs timezone <target> <tz|reset>        # timezone (e.g. America/Sao_Paulo)
 chromex.mjs locale   <target> <locale|reset>    # locale (e.g. pt-BR)
@@ -138,6 +154,17 @@ chromex.mjs coverage <target> start|stop        # CSS/JS code coverage
 chromex.mjs trace    <target> start|stop [file] # performance trace
 chromex.mjs heap     <target> snapshot [file]   # heap snapshot (memory analysis)
 chromex.mjs webauthn <target> enable|creds|dis  # virtual passkey authenticator
+```
+
+### Audit & Analytics
+
+```bash
+chromex.mjs audit   <target> [categories] [device]  # Lighthouse audit (perf, a11y, seo)
+chromex.mjs audit   <target> accessibility desktop   # specific category + device
+chromex.mjs stats   <target>                    # session analytics (commands, timing, errors)
+chromex.mjs stats   <target> --full             # full timeline
+chromex.mjs stats   <target> --reset            # reset counters
+chromex.mjs stats   <target> --export=/tmp/s.json  # export as JSON
 ```
 
 ## Ref-Based Selection
@@ -157,7 +184,7 @@ chromex.mjs hover <target> @e3
 
 ## Auto-Snapshot
 
-Interactive commands (`click`, `clickxy`, `fill`, `type`, `navigate`, `select`, `check`, `clear`, `form`, `dialog`, `loadall`, `drag`, `touch`, `upload`) automatically append an incremental snapshot with refs after executing. This means:
+Interactive commands (`click`, `clickxy`, `fill`, `type`, `key`, `navigate`, `select`, `check`, `clear`, `form`, `dialog`, `loadall`, `drag`, `touch`, `upload`) automatically append an incremental snapshot with refs after executing. This means:
 
 - **No need to call `snap` after interacting** -- the page state is already in the response
 - The returned refs (`@eN`) are immediately usable for the next action

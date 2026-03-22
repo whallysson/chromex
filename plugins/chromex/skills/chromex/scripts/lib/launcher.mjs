@@ -58,7 +58,15 @@ export async function launchBrowser(options = {}) {
     '--no-default-browser-check',
   ];
 
+  if (options.headless) flags.push('--headless=new');
   if (options.incognito) flags.push('--incognito');
+  if (options.proxy) flags.push(`--proxy-server=${options.proxy}`);
+  if (options.insecure) flags.push('--ignore-certificate-errors');
+
+  if (options.chromeArgs) {
+    const extra = Array.isArray(options.chromeArgs) ? options.chromeArgs : [options.chromeArgs];
+    for (const arg of extra) if (arg) flags.push(arg);
+  }
 
   if (options.profile) {
     const profilePath = resolve(PROFILES_DIR, options.profile);

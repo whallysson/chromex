@@ -17,14 +17,21 @@ export async function resolveRefToCoords(cdp, sid, refMap, refNum) {
   return { x, y, ref };
 }
 
-// Click an element by ref
-export async function clickRefStr(cdp, sid, refMap, refNum) {
+// Click an element by ref (supports double-click via dbl flag)
+export async function clickRefStr(cdp, sid, refMap, refNum, dbl = false) {
   const { x, y, ref } = await resolveRefToCoords(cdp, sid, refMap, refNum);
-  const base = { x, y, button: 'left', clickCount: 1, modifiers: 0 };
+  const clickCount = dbl ? 2 : 1;
+  const base = { x, y, button: 'left', clickCount, modifiers: 0 };
   await cdp.send('Input.dispatchMouseEvent', { ...base, type: 'mousePressed' }, sid);
   await sleep(50);
   await cdp.send('Input.dispatchMouseEvent', { ...base, type: 'mouseReleased' }, sid);
-  return `Clicked @e${refNum} [${ref.role}] "${ref.name}" at (${Math.round(x)}, ${Math.round(y)})`;
+  if (dbl) {
+    await cdp.send('Input.dispatchMouseEvent', { ...base, type: 'mousePressed' }, sid);
+    await sleep(50);
+    await cdp.send('Input.dispatchMouseEvent', { ...base, type: 'mouseReleased' }, sid);
+  }
+  const verb = dbl ? 'Double-clicked' : 'Clicked';
+  return `${verb} @e${refNum} [${ref.role}] "${ref.name}" at (${Math.round(x)}, ${Math.round(y)})`;
 }
 
 // Hover over an element by ref

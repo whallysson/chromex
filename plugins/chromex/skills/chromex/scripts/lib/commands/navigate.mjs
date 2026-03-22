@@ -24,7 +24,32 @@ export async function waitForDocumentReady(cdp, sid, timeoutMs = 30000) {
   throw new Error('Timed out waiting for navigation');
 }
 
-export async function navStr(cdp, sid, url, config) {
+export async function navStr(cdp, sid, urlOrAction, config) {
+  // Handle navigation actions: back, forward, reload
+  const action = urlOrAction?.toLowerCase();
+  if (action === 'back') {
+    await evalStr(cdp, sid, 'history.back()');
+    await waitForDocumentReady(cdp, sid, config.navigationTimeout || 30000);
+    return 'Navigated back';
+  }
+  if (action === 'forward') {
+    await evalStr(cdp, sid, 'history.forward()');
+    await waitForDocumentReady(cdp, sid, config.navigationTimeout || 30000);
+    return 'Navigated forward';
+  }
+  if (action === 'reload') {
+    await cdp.send('Page.reload', { ignoreCache: false }, sid);
+    await waitForDocumentReady(cdp, sid, config.navigationTimeout || 30000);
+    return 'Page reloaded';
+  }
+  if (action === 'reload-hard') {
+    await cdp.send('Page.reload', { ignoreCache: true }, sid);
+    await waitForDocumentReady(cdp, sid, config.navigationTimeout || 30000);
+    return 'Page hard-reloaded (cache bypassed)';
+  }
+
+  // Standard URL navigation
+  const url = urlOrAction;
   const domainError = checkDomain(url, config);
   if (domainError) throw new Error(domainError);
 

@@ -67,10 +67,10 @@ describe('MCP Protocol', () => {
     expect(r.result.protocolVersion).toBe('2025-03-26');
     expect(r.result.capabilities).toEqual({ tools: {} });
     expect(r.result.serverInfo.name).toBe('chromex');
-    expect(r.result.serverInfo.version).toBe('1.0.0');
+    expect(r.result.serverInfo.version).toBe('1.4.0');
   });
 
-  it('tools/list returns 52 tools', async () => {
+  it('tools/list returns 56 tools', async () => {
     const responses = await mcpSession([
       INIT,
       INITIALIZED,
@@ -78,7 +78,7 @@ describe('MCP Protocol', () => {
     ]);
     const r = findById(responses, 1);
     expect(r).toBeDefined();
-    expect(r.result.tools).toHaveLength(52);
+    expect(r.result.tools).toHaveLength(56);
   });
 
   it('ping returns empty object', async () => {
@@ -269,10 +269,10 @@ describe('Tool Execution (no browser)', () => {
 describe('Auto-Snapshot Tools', () => {
   // Tools that modify DOM and should include noSnap parameter + auto-snapshot description
   const AUTO_SNAP_TOOLS = [
-    'chromex_click', 'chromex_clickxy', 'chromex_type', 'chromex_fill',
-    'chromex_clear', 'chromex_select', 'chromex_check', 'chromex_form',
-    'chromex_navigate', 'chromex_dialog', 'chromex_loadall', 'chromex_drag',
-    'chromex_touch', 'chromex_upload',
+    'chromex_click', 'chromex_clickxy', 'chromex_type', 'chromex_press_key',
+    'chromex_fill', 'chromex_clear', 'chromex_select', 'chromex_check',
+    'chromex_form', 'chromex_navigate', 'chromex_dialog', 'chromex_loadall',
+    'chromex_drag', 'chromex_touch', 'chromex_upload',
   ];
 
   // Tools that should NOT have noSnap
@@ -342,7 +342,7 @@ describe('Auto-Snapshot Tools', () => {
     }
   });
 
-  it('exactly 14 tools have noSnap', async () => {
+  it('exactly 15 tools have noSnap', async () => {
     const responses = await mcpSession([
       INIT,
       INITIALIZED,
@@ -350,7 +350,7 @@ describe('Auto-Snapshot Tools', () => {
     ]);
     const tools = findById(responses, 1).result.tools;
     const withNoSnap = tools.filter(t => t.inputSchema.properties.noSnap);
-    expect(withNoSnap).toHaveLength(14);
+    expect(withNoSnap).toHaveLength(15);
   });
 });
 
@@ -366,15 +366,16 @@ describe('Tool Names', () => {
     'chromex_eval', 'chromex_evalraw',
     'chromex_navigate', 'chromex_waitfor', 'chromex_wait', 'chromex_scroll',
     'chromex_click', 'chromex_clickxy', 'chromex_type', 'chromex_hover',
-    'chromex_drag', 'chromex_touch', 'chromex_dialog', 'chromex_loadall',
+    'chromex_drag', 'chromex_touch', 'chromex_dialog', 'chromex_press_key', 'chromex_loadall',
     'chromex_fill', 'chromex_clear', 'chromex_select', 'chromex_check',
     'chromex_form', 'chromex_upload',
     'chromex_cookies', 'chromex_storage', 'chromex_pdf',
     'chromex_throttle', 'chromex_intercept', 'chromex_har',
     'chromex_emulate', 'chromex_geo', 'chromex_timezone',
-    'chromex_locale', 'chromex_cpu',
+    'chromex_locale', 'chromex_cpu', 'chromex_resize',
     'chromex_inject', 'chromex_download', 'chromex_coverage',
     'chromex_trace', 'chromex_heap', 'chromex_webauthn',
+    'chromex_audit', 'chromex_stats',
   ];
 
   it('all expected tools exist', async () => {

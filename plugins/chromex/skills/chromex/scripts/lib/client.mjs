@@ -16,6 +16,7 @@ export class CDP {
   }
 
   async connect(wsUrl) {
+    this.wsUrl = wsUrl;
     return new Promise((res, rej) => {
       this.#ws = new WebSocket(wsUrl);
       this.#ws.onopen = () => res();
