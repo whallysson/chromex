@@ -1,6 +1,7 @@
 // Cookie management via CDP Network domain
 
 import { evalStr } from './evaluate.mjs';
+import { emptyState } from '../output.mjs';
 
 export async function cookiesStr(cdp, sid, action, arg) {
   switch (action) {
@@ -12,7 +13,7 @@ export async function cookiesStr(cdp, sid, action, arg) {
       const { cookies } = await cdp.send('Network.getCookies', { urls: [url] }, sid);
       await cdp.send('Network.disable', {}, sid);
 
-      if (cookies.length === 0) return 'No cookies found for this page.';
+      if (cookies.length === 0) return emptyState('cookies', '0 cookies for this page');
 
       return cookies.map(c => {
         const flags = [

@@ -1,6 +1,7 @@
 // Core Web Vitals + performance metrics
 
 import { evalStr } from './evaluate.mjs';
+import { emptyState } from '../output.mjs';
 
 export async function perfStr(cdp, sid) {
   // Métricas do CDP
@@ -52,6 +53,15 @@ export async function perfStr(cdp, sid) {
   const v = JSON.parse(vitals);
   const cdpMetrics = {};
   for (const m of metrics) cdpMetrics[m.name] = m.value;
+
+  // Empty state: no vitals, no nav timing, no resources -- page not loaded or blank
+  if (
+    v.lcp == null && v.fcp == null && v.ttfb == null &&
+    v.domInteractive == null && v.load == null &&
+    (!v.resources || v.resources === 0)
+  ) {
+    return emptyState('perf', 'no metrics available (page not loaded?)');
+  }
 
   const lines = ['## Core Web Vitals'];
 

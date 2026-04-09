@@ -1,6 +1,7 @@
 // LocalStorage / SessionStorage management
 
 import { evalStr } from './evaluate.mjs';
+import { emptyState } from '../output.mjs';
 
 export async function storageStr(cdp, sid, action) {
   switch (action) {
@@ -12,7 +13,7 @@ export async function storageStr(cdp, sid, action) {
       `);
       const data = JSON.parse(raw);
       const keys = Object.keys(data);
-      if (keys.length === 0) return 'localStorage is empty.';
+      if (keys.length === 0) return emptyState('storage', 'localStorage is empty');
       return keys.map(k => {
         const v = data[k];
         const val = v && v.length > 80 ? v.slice(0, 80) + '...' : v;
@@ -28,7 +29,7 @@ export async function storageStr(cdp, sid, action) {
       `);
       const data = JSON.parse(raw);
       const keys = Object.keys(data);
-      if (keys.length === 0) return 'sessionStorage is empty.';
+      if (keys.length === 0) return emptyState('storage', 'sessionStorage is empty');
       return keys.map(k => {
         const v = data[k];
         const val = v && v.length > 80 ? v.slice(0, 80) + '...' : v;

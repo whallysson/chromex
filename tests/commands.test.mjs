@@ -230,8 +230,8 @@ describe('SessionStats', () => {
 // ---- statsStr ----
 
 describe('statsStr', () => {
-  it('returns no stats message for empty stats', () => {
-    expect(statsStr(null)).toBe('No stats available.');
+  it('returns standardized empty state for null stats', () => {
+    expect(statsStr(null)).toBe('stats: no stats available');
   });
 
   it('formats command breakdown table', () => {
@@ -286,11 +286,11 @@ describe('statsStr', () => {
 // ---- netListStr ----
 
 describe('netListStr', () => {
-  it('returns empty message for no requests', () => {
-    expect(netListStr(new Map())).toContain('No network requests');
+  it('returns standardized empty state for no requests', () => {
+    expect(netListStr(new Map())).toBe('network: 0 requests captured since daemon started');
   });
 
-  it('formats request list', () => {
+  it('formats request list with aggregate header', () => {
     const reqs = new Map();
     reqs.set('req1.1', { url: 'https://example.com/api', method: 'GET', status: 200, mimeType: 'application/json' });
     reqs.set('req2.1', { url: 'https://example.com/style.css', method: 'GET', status: 304 });
@@ -300,7 +300,22 @@ describe('netListStr', () => {
     expect(output).toContain('304');
     expect(output).toContain('example.com/api');
     expect(output).toContain('example.com/style.css');
-    expect(output).toContain('2 requests');
+    // Pre-computed aggregate header: total + ok count (both are < 400 so ok:2)
+    expect(output).toContain('network[2] ok:2');
+  });
+
+  it('breaks down requests by status class in aggregate header', () => {
+    const reqs = new Map();
+    reqs.set('req1.1', { url: 'https://ok.com', method: 'GET', status: 200 });
+    reqs.set('req2.1', { url: 'https://err.com', method: 'GET', status: 500 });
+    reqs.set('req3.1', { url: 'https://err2.com', method: 'GET', status: 404 });
+    reqs.set('req4.1', { url: 'https://pend.com', method: 'POST' });
+
+    const output = netListStr(reqs);
+    expect(output).toContain('network[4]');
+    expect(output).toContain('errors:2');
+    expect(output).toContain('pending:1');
+    expect(output).toContain('ok:1');
   });
 
   it('shows pending status for incomplete requests', () => {
@@ -312,14 +327,17 @@ describe('netListStr', () => {
     expect(output).toContain('POST');
   });
 
-  it('limits to last 50 entries', () => {
+  it('limits to last 50 entries and reports full total in aggregate + trunc note', () => {
     const reqs = new Map();
     for (let i = 0; i < 60; i++) {
       reqs.set(`req${i}.1`, { url: `https://example.com/${i}`, method: 'GET', status: 200 });
     }
 
     const output = netListStr(reqs);
-    expect(output).toContain('50 requests');
+    // Aggregate reports full total (60), not the 50 shown
+    expect(output).toContain('network[60] ok:60');
+    // Truncation note tells agent there are more
+    expect(output).toContain('showing last 50 of 60');
   });
 });
 
@@ -395,11 +413,11 @@ describe('netDetailStr', () => {
 // ---- consoleListStr ----
 
 describe('consoleListStr', () => {
-  it('returns empty message for no messages', () => {
-    expect(consoleListStr([])).toContain('No console messages');
+  it('returns standardized empty state for no messages', () => {
+    expect(consoleListStr([])).toBe('console: 0 messages captured since daemon started');
   });
 
-  it('formats message list with type prefix', () => {
+  it('formats message list with type prefix and aggregate header', () => {
     const msgs = [
       { id: 0, ts: Date.now(), type: 'log', args: ['hello world'] },
       { id: 1, ts: Date.now(), type: 'error', args: ['something broke'] },
@@ -415,18 +433,39 @@ describe('consoleListStr', () => {
     expect(output).toContain('WRN');
     expect(output).toContain('hello world');
     expect(output).toContain('something broke');
+    // Pre-computed aggregate header
+    expect(output).toContain('console[3]');
+    expect(output).toContain('errors:1');
+    expect(output).toContain('warnings:1');
+    expect(output).toContain('info:1');
   });
 
-  it('limits to last 50 messages', () => {
+  it('omits zero-count keys from aggregate header', () => {
+    const msgs = [
+      { id: 0, ts: Date.now(), type: 'log', args: ['a'] },
+      { id: 1, ts: Date.now(), type: 'log', args: ['b'] },
+    ];
+    const output = consoleListStr(msgs);
+    // Only "info" should appear -- no errors or warnings
+    expect(output).toContain('console[2] info:2');
+    expect(output).not.toContain('errors:');
+    expect(output).not.toContain('warnings:');
+  });
+
+  it('limits to last 50 messages and reports full total + trunc note', () => {
     const msgs = [];
     for (let i = 0; i < 60; i++) {
       msgs.push({ id: i, ts: Date.now(), type: 'log', args: [`msg ${i}`] });
     }
 
     const output = consoleListStr(msgs);
+    // Aggregate reports full total, not the 50 shown
+    expect(output).toContain('console[60] info:60');
+    // Truncation note
+    expect(output).toContain('showing last 50 of 60');
     // Should NOT contain first 10 messages (0-9)
-    expect(output).not.toContain('[0]');
-    expect(output).not.toContain('[9]');
+    expect(output).not.toContain('[0] ');
+    expect(output).not.toContain('[9] ');
     // Should contain last 50 (10-59)
     expect(output).toContain('[10]');
     expect(output).toContain('[59]');

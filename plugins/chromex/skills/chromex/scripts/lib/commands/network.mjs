@@ -1,27 +1,56 @@
 // Network: resource timing + CDP request detail
 
 import { evalStr } from './evaluate.mjs';
+import { emptyState, aggregate, formatBytes } from '../output.mjs';
 
 export async function netStr(cdp, sid) {
   const raw = await evalStr(cdp, sid, `JSON.stringify(performance.getEntriesByType('resource').map(e => ({
     name: e.name.substring(0, 120), type: e.initiatorType,
     duration: Math.round(e.duration), size: e.transferSize
   })))`);
-  return JSON.parse(raw).map(e =>
+  const resources = JSON.parse(raw);
+  if (resources.length === 0) return emptyState('network', '0 resources timed (page not loaded or resources cached)');
+
+  // Pre-computed aggregates: total transfer size so agent doesn't need a follow-up sum.
+  const totalSize = resources.reduce((s, e) => s + (e.size || 0), 0);
+  const header = aggregate('network', resources.length, { size: formatBytes(totalSize) });
+
+  const rows = resources.map(e =>
     `${String(e.duration).padStart(5)}ms  ${String(e.size || '?').padStart(8)}B  ${e.type.padEnd(8)}  ${e.name}`
-  ).join('\n');
+  );
+  return `${header}\n${rows.join('\n')}`;
 }
 
 export function netListStr(networkRequests) {
-  if (networkRequests.size === 0) return 'No network requests captured since daemon started.';
+  if (networkRequests.size === 0) return emptyState('network', '0 requests captured since daemon started');
+
+  // Pre-computed aggregates: breakdown by status class.
+  // Agents commonly ask "are there any errors?" -- embedding the count eliminates a round-trip.
+  let errors = 0;
+  let pending = 0;
+  let ok = 0;
+  for (const [, r] of networkRequests.entries()) {
+    if (r.status == null) pending++;
+    else if (r.status >= 400) errors++;
+    else ok++;
+  }
+  const meta = {};
+  if (errors) meta.errors = errors;
+  if (pending) meta.pending = pending;
+  if (ok) meta.ok = ok;
+  const header = aggregate('network', networkRequests.size, meta);
+
   const entries = [...networkRequests.entries()].slice(-50);
-  const header = `${'STATUS'.padStart(3)}  ${'METHOD'.padEnd(6)}  ${'ID'.padEnd(14)}  URL`;
+  const tableHeader = `${'STATUS'.padStart(3)}  ${'METHOD'.padEnd(6)}  ${'ID'.padEnd(14)}  URL`;
   const rows = entries.map(([id, r]) => {
     const status = r.status != null ? String(r.status).padStart(3) : '...';
     const method = (r.method || 'GET').padEnd(6);
     return `  ${status}  ${method}  ${id.substring(0, 14).padEnd(14)}  ${r.url?.substring(0, 100) || '?'}`;
   });
-  return `${header}\n${rows.join('\n')}\n\n${entries.length} requests. Use "net <target> <requestId>" for detail.`;
+  const truncNote = networkRequests.size > 50
+    ? `\n(showing last 50 of ${networkRequests.size})`
+    : '';
+  return `${header}\n${tableHeader}\n${rows.join('\n')}${truncNote}\n\nUse "net <target> <requestId>" for detail.`;
 }
 
 export async function netDetailStr(cdp, sid, requestId, networkRequests) {

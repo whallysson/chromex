@@ -2,6 +2,7 @@
 // Tracks command counts, timing, errors, and session timeline
 
 import { writeFileSync } from 'fs';
+import { emptyState } from '../output.mjs';
 
 export class SessionStats {
   constructor() {
@@ -26,12 +27,14 @@ export class SessionStats {
 }
 
 export function statsStr(stats, full = false, exportPath = null) {
-  if (!stats) return 'No stats available.';
+  if (!stats) return emptyState('stats', 'no stats available');
 
   const lines = [];
   const uptime = ((Date.now() - stats.startTime) / 1000).toFixed(0);
   const totalCmds = [...stats.commands.values()].reduce((s, e) => s + e.count, 0);
   const totalErrors = [...stats.commands.values()].reduce((s, e) => s + e.errors, 0);
+
+  if (totalCmds === 0) return emptyState('stats', `no commands executed yet (uptime: ${uptime}s)`);
 
   lines.push(`Session Stats (uptime: ${uptime}s, commands: ${totalCmds}, errors: ${totalErrors})`);
   lines.push('');
