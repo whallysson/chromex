@@ -2,13 +2,18 @@
 
 Zero-dependency Chrome DevTools Protocol toolkit for AI agents. 56 typed MCP tools + CLI. Connects directly to Chrome, Brave, Edge, or Chromium via WebSocket. No Puppeteer, no bloat.
 
+Designed from the ground up for token efficiency: incremental diffs, query-filtered snapshots, ref-based selection, and a plain-text output format that consistently beats JSON and YAML-style structured alternatives by 25% to 126% in head-to-head token measurements (see [Token Efficiency](#token-efficiency) below).
+
 ## Features
 
 - **56 MCP tools** -- typed JSON Schema, annotations (`readOnlyHint`, `destructiveHint`), inline screenshots (base64)
 - **Zero dependencies** -- uses only Node.js 22+ built-in modules (WebSocket, fs, net, crypto)
 - **Ref-based selection** -- `snap --refs` assigns `@e1`, `@e2`... to interactive elements, then `click @e5` or `fill @e3 "value"`. No fragile CSS selectors
 - **Incremental snapshots** -- second snapshot returns only changed nodes (diff), reducing output from thousands of lines to just what changed
+- **Query-filtered snapshots** -- `snap --query=login` returns only matching nodes and their ancestors, cutting output by 95% to 99% on large pages like GitHub, Jira, or Gmail
 - **Auto-snapshot** -- interactive commands (click, fill, nav, etc.) automatically append an incremental snapshot with refs, so the agent sees the page state in a single round-trip
+- **Contextual hints** -- after each action, chromex appends up to 3 `help[]` next-step suggestions picked from the current ref map, eliminating the "what do I do next" turn. Opt-out with `--no-hints`
+- **Pre-computed aggregates** -- `net` and `console` outputs embed counters (`network[47] errors:3 pending:0 ok:44`, `console[12] errors:2 warnings:4 info:6`) so the agent never needs a follow-up count
 - **Scroll detection** -- snapshots report scrollable containers with remaining distance (`[scroll: page: down:1200px | sidebar: up:300px]`)
 - **Per-tab persistent daemons** -- each tab gets a background process connected via Unix socket. Chrome's "Allow debugging" modal fires once, not on every command
 - **Security hardened** -- domain filtering (allow/blocklist), CDP method blocklist, token-authenticated sockets, full audit log
@@ -157,6 +162,7 @@ chromex snap    <target>                    # Accessibility tree snapshot (compa
 chromex snap    <target> --refs             # With interactive refs (@e1, @e2...)
 chromex snap    <target> --depth=3          # Limit tree depth
 chromex snap    <target> --full             # Force full snapshot (skip diff)
+chromex snap    <target> --query=login      # Filter to matching nodes + ancestors (hierarchy preserved)
 chromex html    <target> "#main"            # Element HTML by selector
 chromex shot    <target> /tmp/page.png      # Viewport screenshot
 chromex shot    <target> /tmp/full.png --full  # Full page screenshot
@@ -381,6 +387,30 @@ chromex snap <target> --depth=3    # Only 3 levels deep
 
 Nodes at the depth limit render as leaves (children are not expanded).
 
+### Query Filter
+
+On large pages, a full accessibility tree can be tens of kilobytes. Use `--query` to keep only the nodes you care about, with their ancestors preserved so the hierarchy stays intact:
+
+```bash
+chromex snap <target> --query=login     # Substring match (case-insensitive)
+chromex snap <target> --query=issues    # role/name/value all searched
+```
+
+Matched nodes are prefixed with `>` in the output, so the agent can spot them at a glance. Ancestor chains are included from the match up to the root, so the agent still understands the surrounding structure.
+
+`@eN` refs stay stable across filtered and unfiltered calls because the ref map is always computed against the full tree. A filtered `snap --query=login` followed by a plain `snap --refs` returns the same ref numbering. Fingerprints for incremental diff are also computed on the full tree, so the next non-query snapshot still produces a correct diff against the previous state.
+
+Measured reduction on a real 65 KB GitHub repo page snapshot:
+
+| Query | Output bytes | Reduction |
+|-------|-------------:|----------:|
+| `snap --full` (baseline) | 65,455 | -- |
+| `snap --query=issues` | 317 | **-99.5%** |
+| `snap --query=star` | 1,490 | **-97.7%** |
+| `snap --query=readme` | 936 | **-98.6%** |
+
+When no node matches, chromex returns the explicit empty state `snap: no matches for query "X"` so the agent never confuses an empty filter with a silent failure.
+
 ### Scroll Detection
 
 Snapshots automatically detect scrollable containers and report remaining scroll distance:
@@ -420,6 +450,95 @@ chromex fill <target> @e1 "user@test.com" --no-snap
 chromex fill <target> @e2 "secret123" --no-snap
 chromex click <target> @e3    # Only this one triggers snapshot
 ```
+
+## Contextual Hints
+
+After any action that produces a fresh ref map (auto-snap on interactive commands, or an explicit `snap --refs`), chromex appends a `help[N]:` block with up to 3 next-step suggestions picked heuristically from the current elements and the last command:
+
+```
+Navigated to https://github.com/login
+
+RootWebArea "Sign in to GitHub"
+  @e1 [textbox] Username or email address
+  @e2 [textbox] Password
+  @e3 [button] Sign in
+  @e4 [link] Forgot password?
+
+help[3]:
+  chromex fill <t> @e1 "<value>"  # textbox "Username or email address"
+  chromex click <t> @e3           # button "Sign in"
+  chromex click <t> @e4           # link "Forgot password?"
+```
+
+The agent gets the most probable next commands inline, eliminating the "decide what to click" turn. Heuristic rules:
+
+- **After `fill`** -- priority is a matching submit button (label matches `login`, `submit`, `send`, `search`, `go`, `continue`, ...) or `key Enter` fallback, then the next unfilled input.
+- **After `nav`** -- first input (highest priority), then first submit button, then first link.
+- **After `snap --refs`** (or any default) -- top interactive elements with non-empty names.
+- **Maximum 3 hints per response.**
+
+### Staleness Guard
+
+Hints are only emitted when chromex can guarantee the ref map matches the DOM that was just rendered. This prevents the agent from clicking `@eN` coordinates that no longer exist on screen:
+
+| Command | Hints? | Why |
+|---------|--------|-----|
+| `click`, `fill`, `nav`, `type`, ... (default) | Yes | auto-snap just ran with refs |
+| `click @e1 --no-snap`, `fill ... --no-snap` | **No** | ref map may be stale |
+| `snap --refs` | Yes | ref map populated by this call |
+| `snap --refs` on a page with zero interactive elements | **No** | nothing to suggest, avoids a `snap --refs` loop |
+| Bare `snap` (no `--refs`) | **No** | ref map was not refreshed |
+
+Navigation (URL, back, forward, reload) always clears the ref map before dispatching, so post-nav hints always reflect the new page.
+
+Opt out explicitly with `--no-hints` (CLI) or `noHints: true` (MCP) for scripts that parse output strictly.
+
+## Token Efficiency
+
+Chromex outputs are designed to be read by LLM agents, not humans. Every format decision -- plain text, refs over CSS selectors, incremental diffs, query filters -- was made to minimize tokens while preserving the information the agent actually needs to act.
+
+### Measured against common alternatives
+
+We measured the current plain-text output against three structured format candidates often proposed for agent interfaces: minified JSON, pretty-printed JSON, and a TOON-style compact encoder (a zero-dependency 60-line implementation of the YAML-inline compact style). Five representative chromex outputs were encoded in each format and tokenized with `tiktoken` (`cl100k_base`). Lower token counts are better.
+
+#### Case by case
+
+| Case                           | text-free  | json-min       | json-pretty     | toon-compact    |
+|--------------------------------|-----------:|---------------:|----------------:|----------------:|
+| `snap-login-small`             |    **130** |    178 (+37%)  |     301 (+132%) |      212 (+63%) |
+| `snap-repo-large` (65 KB real) | **19,702** | 34,315 (+74%)  |  63,232 (+221%) |  44,613 (+126%) |
+| `net-list-50`                  |    **454** |    574 (+26%)  |     921 (+103%) |      706 (+56%) |
+| `console-list-12`              |    **273** |    363 (+33%)  |     576 (+111%) |      453 (+66%) |
+| `fill-action-small`            |     **99** |    127 (+28%)  |     221 (+123%) |      146 (+48%) |
+
+The five cases cover the most common outputs an agent sees during a real session: a small accessibility snapshot with refs (a login form), a large accessibility snapshot of a real GitHub repository page, a network list with 50 tracked requests, a console list with a mix of `log`, `warn` and `error` entries, and a post-action result (fill + incremental diff + hints).
+
+#### Aggregate (5 cases combined)
+
+| Format                 |    tokens | vs text-free |
+|------------------------|----------:|-------------:|
+| **text-free (current)**| **20,658**|        --    |
+| json-min               |    35,557 |       +72.1% |
+| json-pretty            |    65,251 |      +215.9% |
+| toon-compact (custom)  |    46,130 |      +123.3% |
+
+The current plain-text output is the most token-efficient in every single case. Every structured alternative costs more tokens, not less, because JSON and YAML-style encodings add syntactic overhead (`{`, `}`, `"`, `:`, `,`, indentation) that the chromex plain-text format omits entirely. The chromex format is already dense: short refs (`@e5`), unquoted labels, no wrapping, no redundancy. Structured formats have nothing to optimize away.
+
+### Why this matters
+
+- **No structured-output refactor is planned.** Chromex keeps the current plain-text format because the data shows it wins.
+- **`@eN` refs beat CSS selectors** not just for reliability (accessibility tree is stable across SPA re-renders) but also for token count -- `@e5` is one token, `document.querySelector('#login-form > div.field input[name="email"]')` is around fifteen.
+- **`--query` and incremental diff** are where the real token savings live. A filtered snapshot on a large page drops output by 95% to 99%, and an incremental diff after an action drops it by 90% or more. These are multiplicative with the already-dense base format.
+
+### Reproducing the benchmark
+
+The comparison script is checked into the repo and runs standalone:
+
+```bash
+node tests/benchmarks/token-format-comparison.mjs
+```
+
+It uses `js-tiktoken` (devDependency) with `cl100k_base`, the GPT-4 tokenizer. Claude uses its own BPE tokenizer with a different vocabulary, so absolute numbers would shift by a few percent -- but both are byte-pair encoders over similar corpora, and the direction of the comparison (which format wins) is consistent across BPE tokenizers. Nothing in the results is a rounding error: the gaps are 25% to 220%.
 
 ## MCP vs CLI
 
