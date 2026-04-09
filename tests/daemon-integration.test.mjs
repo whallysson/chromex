@@ -11,11 +11,12 @@
 //   - refMap update from explicit `snap --refs` / `-i`
 //   - refMap update from auto-snap on interactive commands
 //   - shouldHint gating via isRefMapFresh
+//   - empty fresh refMap must clear stale refs and emit no help[]
 //
 // If you change any of those rules in daemon.mjs, update this harness too.
 
 import { describe, it, expect } from 'vitest';
-import { isRefMapFresh } from '../plugins/chromex/skills/chromex/scripts/lib/hints.mjs';
+import { generateHints, isRefMapFresh } from '../plugins/chromex/skills/chromex/scripts/lib/hints.mjs';
 
 // Must stay in sync with AUTO_SNAP_CMDS in daemon.mjs
 const AUTO_SNAP_CMDS = new Set([
@@ -51,19 +52,16 @@ function createDaemonHarness() {
      * @param {boolean} [input.noHints]
      * @param {{refMap:Map, fingerprints:Map}|null} [input.mockSnapResult]
      *   If provided, simulates what snapshotStr would return for this call.
-     * @returns {{shouldHint: boolean, refMap: Map, lastFilledRef: number|null}}
+     * @returns {{shouldHint: boolean, refMap: Map, lastFilledRef: number|null, hints: Array}}
      */
     execute({ cmd, args = [], noSnap = false, noHints = false, mockSnapResult = null }) {
       // Strip both flags the same way chromex.mjs does before daemon dispatch.
       const cleanArgs = args.filter((a) => a !== '--no-snap' && a !== '--no-hints');
       const shouldSnap = AUTO_SNAP_CMDS.has(cmd);
 
-      // ---- nav: reset ref map + lastFilledRef, conditionally reset fingerprints
+      // ---- nav: reset ref map + lastFilledRef + diff baseline
       if (cmd === 'nav' || cmd === 'navigate') {
-        const navAction = cleanArgs[0]?.toLowerCase();
-        if (navAction !== 'back' && navAction !== 'forward') {
-          previousFingerprints = null;
-        }
+        previousFingerprints = null;
         currentRefMap = new Map();
         lastFilledRef = null;
       }
@@ -96,11 +94,15 @@ function createDaemonHarness() {
         noSnap,
         args: cleanArgs,
       });
+      const hints = shouldHint
+        ? generateHints({ cmd, refMap: currentRefMap, lastFilledRef, hasPage: true })
+        : [];
 
       return {
         shouldHint,
         refMap: new Map(currentRefMap),
         lastFilledRef,
+        hints,
       };
     },
   };
@@ -198,6 +200,29 @@ describe('daemon P1 regression: stale refs cannot leak into hints', () => {
 
     const r = d.execute({ cmd: 'fill', args: ['@e1', 'hello'], noSnap: true });
     expect(r.shouldHint).toBe(false);
+  });
+
+  it('fresh auto-snap with zero refs clears stale state and emits no hints', () => {
+    const d = createDaemonHarness();
+
+    d.execute({
+      cmd: 'snap',
+      args: ['--refs'],
+      mockSnapResult: mkSnap([
+        [1, 'textbox', 'Email'],
+        [2, 'button', 'Sign in'],
+      ]),
+    });
+
+    const r = d.execute({
+      cmd: 'click',
+      args: ['@e2'],
+      mockSnapResult: mkSnap([]),
+    });
+
+    expect(r.shouldHint).toBe(true);
+    expect(r.refMap.size).toBe(0);
+    expect(r.hints).toEqual([]);
   });
 });
 
@@ -314,5 +339,14 @@ describe('daemon state transitions over a realistic flow', () => {
     const r = d.execute({ cmd: 'nav', args: ['back'], noSnap: true });
     expect(r.refMap.size).toBe(0);
     expect(r.shouldHint).toBe(false);
+  });
+
+  it('any navigation also resets the diff baseline for the next snapshot', () => {
+    const d = createDaemonHarness();
+    d.execute({ cmd: 'snap', args: ['--refs'], mockSnapResult: mkSnap([[1, 'button', 'Now']]) });
+    expect(d.getState().previousFingerprints).toBeInstanceOf(Map);
+
+    d.execute({ cmd: 'nav', args: ['forward'], noSnap: true });
+    expect(d.getState().previousFingerprints).toBe(null);
   });
 });

@@ -95,12 +95,18 @@ export function generateHints({ cmd, refMap, lastFilledRef = null, hasPage = tru
     ];
   }
 
-  // Page exists but no refs assigned -> tell agent to snap --refs first
-  if (!refMap || refMap.size === 0) {
+  // Missing refMap usually means the caller never captured refs for this page.
+  // In that case, teach the agent how to populate them.
+  if (!refMap) {
     return [
       { cmd: 'chromex snap <t> --refs', comment: 'assign @eN refs to interactive elements' },
     ];
   }
+
+  // Fresh snapshot with an EMPTY refMap means there are no interactive refs on
+  // the page we just rendered. Returning "snap --refs" here would create a
+  // pointless loop, because the agent already did that work and learned "none".
+  if (refMap.size === 0) return [];
 
   const buckets = bucket(refMap);
   const { submitButtons, buttons, inputs, links } = buckets;

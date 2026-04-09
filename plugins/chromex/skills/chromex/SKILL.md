@@ -232,6 +232,7 @@ Staleness guard: hints are ONLY emitted when chromex can guarantee the refMap ma
 - `click`, `fill`, `nav`, `type`, etc. -- hints on (because auto-snap just ran with refs).
 - `click @e1 --no-snap`, `fill ... --no-snap`, etc. -- hints OFF (the refMap may be stale).
 - `snap --refs` -- hints on.
+- `snap --refs` on a page with zero interactive elements -- hints OFF (no pointless "snap --refs" loop).
 - Bare `snap` (no `--refs`) -- hints OFF.
 
 Opt-out explicitly with `--no-hints` (CLI flag) or `noHints: true` (MCP) for scripts that parse output strictly.

@@ -136,6 +136,10 @@ Usage: chromex <command> [args]
 
 <target> is a unique targetId prefix from "chromex list". Ambiguous prefixes are rejected.
 
+OUTPUT FLAGS
+  --no-snap   Skip auto-snapshot after interactive commands
+  --no-hints  Suppress contextual help[] suggestions
+
 SECURITY
   Config: ~/.chromex/config.json
   - blockedDomains / allowedDomains: domain filtering

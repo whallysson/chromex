@@ -26,10 +26,9 @@ describe('generateHints -- bootstrap states', () => {
     expect(hints[1].cmd).toBe('chromex launch');
   });
 
-  it('returns snap --refs hint when page exists but refMap is empty', () => {
+  it('returns no hints when a fresh snapshot has zero interactive refs', () => {
     const hints = generateHints({ cmd: 'nav', refMap: new Map(), hasPage: true });
-    expect(hints).toHaveLength(1);
-    expect(hints[0].cmd).toBe('chromex snap <t> --refs');
+    expect(hints).toEqual([]);
   });
 
   it('handles missing refMap gracefully', () => {
@@ -143,6 +142,11 @@ describe('generateHints -- default (snap, click, etc)', () => {
     const hints = generateHints({ cmd: 'snap', refMap });
     expect(hints).toHaveLength(1);
     expect(hints[0].cmd).toContain('@e2');
+  });
+
+  it('returns no hints for an explicit empty ref map instead of looping on snap --refs', () => {
+    const hints = generateHints({ cmd: 'snap', refMap: new Map() });
+    expect(hints).toEqual([]);
   });
 });
 

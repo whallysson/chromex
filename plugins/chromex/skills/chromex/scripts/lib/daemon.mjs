@@ -232,7 +232,9 @@ export async function runDaemon(targetId, config) {
           // Always track fingerprints on the full tree -- this survives query filtering
           // because snapshotStr computes them before applying the filter.
           previousFingerprints = snapResult.fingerprints;
-          if (useRefs && snapResult.refMap.size > 0) {
+          // Replace the ref map even when it is empty: a fresh snapshot that found
+          // zero interactive refs must clear any stale @eN left from an older page.
+          if (useRefs) {
             currentRefMap = snapResult.refMap;
           }
           break;
@@ -263,14 +265,11 @@ export async function runDaemon(targetId, config) {
           result = await htmlStr(cdp, sessionId, args[0]);
           break;
         case 'nav': case 'navigate': {
-          const navAction = args[0]?.toLowerCase();
           result = await navStr(cdp, sessionId, args[0], config);
-          // Reset fingerprints for URL navigation and reload (new content).
-          // back/forward preserve fingerprints because the prior page fingerprint
-          // is still a valid diff baseline when we return to it.
-          if (navAction !== 'back' && navAction !== 'forward') {
-            previousFingerprints = null;
-          }
+          // Any navigation changes page identity and can restore DOM via
+          // BFCache/hydration. Reset the diff baseline unconditionally so the
+          // first post-navigation snapshot is always a trustworthy full view.
+          previousFingerprints = null;
           // ANY navigation (including back/forward) invalidates the ref map:
           // the @eN numbers were assigned against a specific DOM render,
           // and even back/forward can restore the page with different hydration.
@@ -487,9 +486,9 @@ export async function runDaemon(targetId, config) {
           await sleep(settleMs);
           const snapResult = await snapshotStr(cdp, sessionId, true, true, previousFingerprints);
           previousFingerprints = snapResult.fingerprints;
-          if (snapResult.refMap.size > 0) {
-            currentRefMap = snapResult.refMap;
-          }
+          // Same rule as explicit snap --refs: fresh empty ref maps must replace
+          // stale state, otherwise hints can suggest dead @eN from a prior screen.
+          currentRefMap = snapResult.refMap;
           result = (result ?? '') + '\n\n' + snapResult.text;
         } catch (e) { process.stderr.write(`[auto-snap] ${e.message}\n`); }
       }
