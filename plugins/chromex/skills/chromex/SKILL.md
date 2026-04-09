@@ -1,7 +1,7 @@
 ---
 name: chromex
 description: "Interact with local Chromium browser session via CDP. Use when asked to inspect, debug, test, scrape, fill forms, take screenshots, or interact with a page open in Chrome/Brave/Edge. Only on explicit user approval. Triggers for: 'inspect page', 'take screenshot', 'fill form', 'check browser', 'debug page', 'web vitals', 'browser automation'."
-version: 1.0.0
+version: 1.5.0
 ---
 
 # Chromex -- Chrome DevTools Protocol CLI
@@ -58,6 +58,7 @@ chromex.mjs snap    <target>                    # accessibility tree (prefer ove
 chromex.mjs snap    <target> --refs             # with interactive refs (@e1, @e2...)
 chromex.mjs snap    <target> --refs --full      # force full snapshot (skip diff)
 chromex.mjs snap    <target> --depth=2          # limit tree depth
+chromex.mjs snap    <target> --query=login      # filter to matches + ancestors (refs stay stable)
 chromex.mjs html    <target> [selector]         # full page or element HTML
 chromex.mjs shot    <target> [file] [--full]    # screenshot (viewport or full page)
 chromex.mjs shot    <target> --format=jpeg --quality=80  # JPEG/WebP with quality
@@ -199,6 +200,51 @@ chromex.mjs click <target> @e5 --no-snap
 ```
 
 **Note on async actions:** The auto-snapshot waits 300ms for DOM to settle after the action. If a click triggers an API call (e.g. form submit, data fetch), the snapshot may capture the loading state rather than the final result. In those cases, use `wait networkidle` after the action before relying on the returned refs.
+
+## Contextual Hints (v1.5.0)
+
+After any action that populates a fresh refMap (auto-snap on interactive commands, or an explicit `snap --refs`), chromex appends a `help[N]:` block with up to 3 next-step suggestions, picked heuristically from the current refMap and the last command.
+
+Example output after `nav https://github.com/login`:
+```
+Navigated to https://github.com/login
+
+RootWebArea "Sign in to GitHub"
+  @e1 [textbox] Username or email address
+  @e2 [textbox] Password
+  @e3 [button] Sign in
+  @e4 [link] Forgot password?
+
+help[3]:
+  chromex fill <t> @e1 "<value>"  # textbox "Username or email address"
+  chromex click <t> @e3  # button "Sign in"
+  chromex click <t> @e4  # link "Forgot password?"
+```
+
+Rules (heuristic, by command):
+- After `fill` -> first hint is a matching submit button (label matches `login|submit|send|search|go|continue|...`), or `key Enter` if no submit is visible; then the next unfilled input.
+- After `nav` -> first input (highest priority), then first submit/button, then first link.
+- After `snap --refs` (or any default) -> top interactives with non-empty labels.
+- Maximum 3 hints per response.
+- `<t>` is a literal placeholder the agent must replace with the target prefix -- the daemon does not know the prefix the agent is using.
+
+Staleness guard: hints are ONLY emitted when chromex can guarantee the refMap matches the DOM just rendered. This means:
+- `click`, `fill`, `nav`, `type`, etc. -- hints on (because auto-snap just ran with refs).
+- `click @e1 --no-snap`, `fill ... --no-snap`, etc. -- hints OFF (the refMap may be stale).
+- `snap --refs` -- hints on.
+- Bare `snap` (no `--refs`) -- hints OFF.
+
+Opt-out explicitly with `--no-hints` (CLI flag) or `noHints: true` (MCP) for scripts that parse output strictly.
+
+## Query-Filtered Snapshots (v1.5.0)
+
+On large pages (GitHub, Jira, Gmail), a full `snap` can be 20-50KB. Use `--query` to filter the tree to nodes matching a substring, with ancestors preserved so the hierarchy stays intact:
+
+```bash
+chromex snap <t> --query=login   # only nodes matching "login" in role/name/value + their ancestors
+```
+
+Matched nodes are prefixed with `>` in the output. `@eN` refs stay stable across filtered and unfiltered calls (the refMap is always computed on the full tree). Incremental diff is temporarily disabled while a query is active (the user wants the matched content, not a diff). When no match is found, chromex returns `snap: no matches for query "X"`.
 
 ## Snapshot Enhancements
 

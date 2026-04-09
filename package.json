@@ -1,7 +1,7 @@
 {
   "name": "chromex-mcp",
-  "version": "1.4.0",
-  "description": "Zero-dependency Chrome DevTools Protocol MCP server for AI agents. 56 typed tools, per-tab daemons, security hardened.",
+  "version": "1.5.0",
+  "description": "Zero-dependency Chrome DevTools Protocol MCP server for AI agents. 56 typed tools, per-tab daemons, security hardened, contextual hints, query-filtered snapshots.",
   "type": "module",
   "bin": {
     "chromex": "./bin/chromex.mjs",

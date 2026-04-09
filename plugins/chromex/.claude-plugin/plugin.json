@@ -1,7 +1,7 @@
 {
   "name": "chromex",
-  "description": "Zero-dependency Chrome DevTools Protocol CLI for AI agents. Per-tab persistent daemons, security hardened, form filling, incognito mode, and 25+ commands.",
-  "version": "1.0.0",
+  "description": "Zero-dependency Chrome DevTools Protocol CLI for AI agents. Per-tab persistent daemons, security hardened, form filling, incognito mode, contextual hints, query-filtered snapshots, and 56 MCP tools.",
+  "version": "1.5.0",
   "author": {
     "name": "Whallysson Avelino",
     "email": "whallysson.dev@gmail.com"
