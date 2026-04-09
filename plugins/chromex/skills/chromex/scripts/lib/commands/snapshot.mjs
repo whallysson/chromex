@@ -1,5 +1,7 @@
 // Accessibility tree snapshot with incremental diff and interactive refs (@e1, @e2...)
 
+import { emptyState } from '../output.mjs';
+
 const INTERACTIVE_ROLES = new Set([
   'button', 'link', 'textbox', 'checkbox', 'radio', 'combobox',
   'menuitem', 'tab', 'switch', 'searchbox', 'slider', 'spinbutton',
@@ -38,23 +40,33 @@ function truncate(str, max = MAX_NAME_LENGTH) {
   return str.slice(0, max) + '...';
 }
 
-function formatAxNode(node, depth, refIndex, refs, isNew = false) {
+// Render a single AX node line. Ref assignment is done OUT of this function
+// (via the refMap pre-pass) so that query-filtered renders still produce
+// the same @eN numbering as unfiltered renders.
+function formatNodeLine(node, depth, refNum, isNew = false, isMatch = false) {
   const role = node.role?.value || '';
   const name = truncate(node.name?.value ?? '');
   const value = node.value?.value;
   const indent = '  '.repeat(Math.min(depth, 10));
 
-  let refTag = '';
-  if (refs && INTERACTIVE_ROLES.has(role.toLowerCase()) && isAxNodeInteractable(node)) {
-    refTag = `@e${refIndex.value} `;
-    refIndex.value++;
-  }
-
+  const refTag = refNum != null ? `@e${refNum} ` : '';
+  const matchTag = isMatch ? '> ' : '';
   const newTag = isNew ? '*' : '';
-  let line = `${indent}${newTag}${refTag}[${role}]`;
+  let line = `${indent}${matchTag}${newTag}${refTag}[${role}]`;
   if (name !== '') line += ` ${name}`;
   if (!(value === '' || value == null)) line += ` = ${JSON.stringify(truncate(String(value)))}`;
   return line;
+}
+
+// Case-insensitive substring match against role, name and value.
+function nodeMatchesQuery(node, query) {
+  if (!query) return false;
+  const q = query.toLowerCase();
+  const role = (node.role?.value || '').toLowerCase();
+  const name = (node.name?.value || '').toLowerCase();
+  const value = node.value?.value;
+  const valueStr = value == null ? '' : String(value).toLowerCase();
+  return role.includes(q) || name.includes(q) || valueStr.includes(q);
 }
 
 function orderedAxChildren(node, nodesById, childrenByParent) {
@@ -144,8 +156,11 @@ async function detectScrollables(cdp, sid) {
 // The caller (daemon) stores this map for later ref resolution.
 // previousFingerprints: Map from prior snapshot for incremental diff.
 // maxDepth: limit tree depth (0 = unlimited). Nodes at the limit render as leaves.
+// query: when set, filter the rendered output to nodes matching (substring) the
+//        query plus their ancestors. Fingerprints and refMap are still computed
+//        against the full tree so incremental diff and @eN stability survive.
 // Returns { text, refMap, fingerprints } -- caller stores fingerprints for next diff.
-export async function snapshotStr(cdp, sid, compact = true, refs = false, previousFingerprints = null, maxDepth = 0) {
+export async function snapshotStr(cdp, sid, compact = true, refs = false, previousFingerprints = null, maxDepth = 0, query = null) {
   const { nodes } = await cdp.send('Accessibility.getFullAXTree', {}, sid);
   const nodesById = new Map(nodes.map(node => [node.nodeId, node]));
   const childrenByParent = new Map();
@@ -156,11 +171,73 @@ export async function snapshotStr(cdp, sid, compact = true, refs = false, previo
   }
 
   const currentFingerprints = buildFingerprints(nodes, nodesById, childrenByParent, compact);
-  const isDiff = previousFingerprints !== null && previousFingerprints.size > 0;
+  const isDiff = previousFingerprints !== null && previousFingerprints.size > 0 && !query;
   const scrollables = await detectScrollables(cdp, sid);
 
-  const refIndex = { value: 1 };
+  const roots = nodes.filter(node => !node.parentId || !nodesById.has(node.parentId));
+
+  // ---- Pre-pass: populate refMap on the FULL tree so @eN stays stable
+  // regardless of query filtering.
   const refMap = new Map();
+  const nodeIdToRef = new Map();
+  if (refs) {
+    let refCounter = 1;
+    const prepassSeen = new Set();
+    const prepass = (node) => {
+      if (!node || prepassSeen.has(node.nodeId)) return;
+      prepassSeen.add(node.nodeId);
+      if (shouldShowAxNode(node, compact)) {
+        const role = node.role?.value || '';
+        if (INTERACTIVE_ROLES.has(role.toLowerCase()) && isAxNodeInteractable(node)) {
+          refMap.set(refCounter, {
+            backendNodeId: node.backendDOMNodeId,
+            nodeId: node.nodeId,
+            role,
+            name: node.name?.value ?? '',
+          });
+          nodeIdToRef.set(node.nodeId, refCounter);
+          refCounter++;
+        }
+      }
+      for (const child of orderedAxChildren(node, nodesById, childrenByParent)) {
+        prepass(child);
+      }
+    };
+    for (const root of roots) prepass(root);
+    if (!maxDepth) {
+      for (const node of nodes) prepass(node);
+    }
+  }
+
+  // ---- Query filter: compute matchedIds + their ancestors (keepIds)
+  let matchedIds = null;
+  let keepIds = null;
+  if (query) {
+    matchedIds = new Set();
+    keepIds = new Set();
+    for (const node of nodes) {
+      if (!shouldShowAxNode(node, compact)) continue;
+      if (nodeMatchesQuery(node, query)) {
+        matchedIds.add(node.nodeId);
+        // Walk ancestors via parentId; include non-visible parents too so the
+        // visit() pass can reach the match by descending through them.
+        let pid = node.parentId;
+        while (pid && !keepIds.has(pid)) {
+          keepIds.add(pid);
+          pid = nodesById.get(pid)?.parentId;
+        }
+        keepIds.add(node.nodeId);
+      }
+    }
+    if (matchedIds.size === 0) {
+      return {
+        text: `snap: no matches for query "${query}"`,
+        refMap,
+        fingerprints: currentFingerprints,
+      };
+    }
+  }
+
   const lines = [];
   const visited = new Set();
 
@@ -173,7 +250,6 @@ export async function snapshotStr(cdp, sid, compact = true, refs = false, previo
     const curr = currentFingerprints.get(nodeId);
     const prev = previousFingerprints.get(nodeId);
     if (!curr || !prev || curr !== prev) return false;
-    // Node itself matches -- check all visible children recursively
     const children = orderedAxChildren(node, nodesById, childrenByParent);
     for (const child of children) {
       if (!shouldShowAxNode(child, compact)) continue;
@@ -186,6 +262,10 @@ export async function snapshotStr(cdp, sid, compact = true, refs = false, previo
     if (!node || visited.has(node.nodeId)) return;
     visited.add(node.nodeId);
 
+    // Query filter: if this node isn't on the keep path, skip the whole subtree.
+    // All nodes with matches have their ancestors in keepIds, so pruning here is safe.
+    if (query && !keepIds.has(node.nodeId)) return;
+
     const show = shouldShowAxNode(node, compact);
 
     if (!show) {
@@ -196,29 +276,18 @@ export async function snapshotStr(cdp, sid, compact = true, refs = false, previo
       return;
     }
 
-    // Incremental diff: if this subtree is unchanged, collapse it
+    // Incremental diff: if this subtree is unchanged, collapse it.
+    // Disabled when a query filter is active (user wants the matched content, not a diff).
     if (isDiff && isSubtreeUnchanged(node)) {
       unchangedCount++;
-      if (refs) {
-        advanceRefsForSubtree(node);
-      }
       return;
     }
 
-    const role = node.role?.value || '';
-    const currentRef = refIndex.value;
     const isNew = isDiff && !previousFingerprints.has(node.nodeId);
+    const isMatch = !!(matchedIds && matchedIds.has(node.nodeId));
+    const refNum = refs ? nodeIdToRef.get(node.nodeId) ?? null : null;
 
-    lines.push(formatAxNode(node, depth, refIndex, refs, isNew));
-
-    if (refs && refIndex.value > currentRef) {
-      refMap.set(currentRef, {
-        backendNodeId: node.backendDOMNodeId,
-        nodeId: node.nodeId,
-        role,
-        name: node.name?.value ?? '',
-      });
-    }
+    lines.push(formatNodeLine(node, depth, refNum, isNew, isMatch));
 
     // Depth limiting: at the limit, render as leaf (no children)
     if (maxDepth > 0 && depth >= maxDepth) return;
@@ -228,30 +297,6 @@ export async function snapshotStr(cdp, sid, compact = true, refs = false, previo
     }
   }
 
-  // Advance ref counter for unchanged subtrees to keep ref numbers stable
-  // Uses its own visited set because visit() already marked nodes before calling this
-  const refAdvanced = new Set();
-  function advanceRefsForSubtree(node) {
-    if (!node || refAdvanced.has(node.nodeId)) return;
-    refAdvanced.add(node.nodeId);
-    if (shouldShowAxNode(node, compact)) {
-      const role = node.role?.value || '';
-      if (INTERACTIVE_ROLES.has(role.toLowerCase()) && isAxNodeInteractable(node)) {
-        refMap.set(refIndex.value, {
-          backendNodeId: node.backendDOMNodeId,
-          nodeId: node.nodeId,
-          role,
-          name: node.name?.value ?? '',
-        });
-        refIndex.value++;
-      }
-    }
-    for (const child of orderedAxChildren(node, nodesById, childrenByParent)) {
-      advanceRefsForSubtree(child);
-    }
-  }
-
-  const roots = nodes.filter(node => !node.parentId || !nodesById.has(node.parentId));
   for (const root of roots) visit(root, 0);
   // Second pass: catch disconnected nodes (skip when depth-limited to avoid false depth=0)
   if (!maxDepth) {
@@ -264,6 +309,10 @@ export async function snapshotStr(cdp, sid, compact = true, refs = false, previo
     const totalVisible = currentFingerprints.size;
     const changedCount = totalVisible - unchangedCount;
     text = `[incremental: ${changedCount} changed, ${unchangedCount} unchanged]\n${text}`;
+  }
+  // Empty state: no visible nodes and not an incremental diff -> page is blank/not ready
+  if (lines.length === 0 && !isDiff) {
+    text = emptyState('snap', 'empty accessibility tree');
   }
   // Append scroll info footer when scrollable containers exist
   if (scrollables.length > 0) {
