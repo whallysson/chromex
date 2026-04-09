@@ -49,6 +49,7 @@ import { parseRef, clickRefStr, hoverRefStr, fillRefStr } from './commands/refs.
 import { highlightStr } from './commands/highlight.mjs';
 import { auditStr } from './commands/audit.mjs';
 import { SessionStats, statsStr } from './commands/stats.mjs';
+import { generateHints, renderHints, isRefMapFresh } from './hints.mjs';
 import { sleep } from './utils.mjs';
 
 // Commands that modify visible DOM and should trigger automatic post-action snapshot.
@@ -121,6 +122,9 @@ export async function runDaemon(targetId, config) {
   // Per-tab state: ref map for @eN resolution + fingerprints for incremental diff
   let currentRefMap = new Map();
   let previousFingerprints = null;
+  // Track the last @eN that was filled so hints can prioritize the NEXT input
+  // in a multi-field form instead of re-suggesting the one we just touched.
+  let lastFilledRef = null;
   const sessionStats = new SessionStats();
 
   // Network request tracking (CDP Network domain) for detail drill-down
@@ -177,10 +181,11 @@ export async function runDaemon(targetId, config) {
     const startMs = Date.now();
     const auditResult = { ok: true };
     try {
-      // Strip --no-snap before dispatch so it doesn't contaminate command args
-      // (e.g. fill would type "--no-snap" into the input field).
+      // Strip --no-snap / --no-hints before dispatch so they don't contaminate
+      // command args (e.g. fill would type "--no-snap" into the input field).
       const noSnap = args.includes('--no-snap');
-      if (noSnap) args = args.filter(a => a !== '--no-snap');
+      const noHints = args.includes('--no-hints');
+      if (noSnap || noHints) args = args.filter(a => a !== '--no-snap' && a !== '--no-hints');
 
       let result;
       let isRefCmd = false;
@@ -194,6 +199,7 @@ export async function runDaemon(targetId, config) {
           result = await clickRefStr(cdp, sessionId, currentRefMap, refNum, dbl);
         } else if (cmd === 'fill') {
           result = await fillRefStr(cdp, sessionId, currentRefMap, refNum, args.slice(1).join(' '));
+          lastFilledRef = refNum;
         } else if (cmd === 'hover') {
           result = await hoverRefStr(cdp, sessionId, currentRefMap, refNum);
         } else {
@@ -218,9 +224,13 @@ export async function runDaemon(targetId, config) {
           const forceFull = args.includes('--full');
           const depthArg = args.find(a => a.startsWith('--depth='));
           const maxDepth = depthArg ? parseInt(depthArg.split('=')[1]) || 0 : 0;
+          const queryArg = args.find(a => a.startsWith('--query='));
+          const query = queryArg ? queryArg.slice('--query='.length) : null;
           const prevFp = forceFull ? null : previousFingerprints;
-          const snapResult = await snapshotStr(cdp, sessionId, true, useRefs, prevFp, maxDepth);
+          const snapResult = await snapshotStr(cdp, sessionId, true, useRefs, prevFp, maxDepth, query);
           result = snapResult.text;
+          // Always track fingerprints on the full tree -- this survives query filtering
+          // because snapshotStr computes them before applying the filter.
           previousFingerprints = snapResult.fingerprints;
           if (useRefs && snapResult.refMap.size > 0) {
             currentRefMap = snapResult.refMap;
@@ -255,10 +265,18 @@ export async function runDaemon(targetId, config) {
         case 'nav': case 'navigate': {
           const navAction = args[0]?.toLowerCase();
           result = await navStr(cdp, sessionId, args[0], config);
-          // Reset fingerprints for URL navigation and reload (new content)
+          // Reset fingerprints for URL navigation and reload (new content).
+          // back/forward preserve fingerprints because the prior page fingerprint
+          // is still a valid diff baseline when we return to it.
           if (navAction !== 'back' && navAction !== 'forward') {
             previousFingerprints = null;
           }
+          // ANY navigation (including back/forward) invalidates the ref map:
+          // the @eN numbers were assigned against a specific DOM render,
+          // and even back/forward can restore the page with different hydration.
+          // Auto-snap (if not --no-snap) will repopulate the refMap immediately below.
+          currentRefMap = new Map();
+          lastFilledRef = null;
           break;
         }
         case 'net': case 'network':
@@ -474,6 +492,26 @@ export async function runDaemon(targetId, config) {
           }
           result = (result ?? '') + '\n\n' + snapResult.text;
         } catch (e) { process.stderr.write(`[auto-snap] ${e.message}\n`); }
+      }
+
+      // Contextual hints: append next-step suggestions to help the agent
+      // pick the next action without guessing. Opt-out via --no-hints.
+      // Only emit hints when the refMap is guaranteed FRESH for this command
+      // (either auto-snap ran, or the user explicitly asked for `snap --refs`).
+      // Without this guard, --no-snap or bare `snap` would emit hints pointing
+      // to @eN from a prior page -- stale and dangerous.
+      const shouldHint = !noHints && isRefMapFresh({ cmd, shouldSnap, noSnap, args });
+      if (shouldHint) {
+        try {
+          const hints = generateHints({
+            cmd,
+            refMap: currentRefMap,
+            lastFilledRef,
+            hasPage: true,
+          });
+          const hintsText = renderHints(hints);
+          if (hintsText) result = (result ?? '') + '\n\n' + hintsText;
+        } catch (e) { process.stderr.write(`[hints] ${e.message}\n`); }
       }
 
       sessionStats.record(cmd, args, startMs, Date.now(), true, null);

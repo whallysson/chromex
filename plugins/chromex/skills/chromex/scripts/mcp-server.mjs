@@ -14,7 +14,7 @@ import { launchBrowser, incognitoContext } from './lib/launcher.mjs';
 import { openTabStr, closeTabStr, focusTabStr } from './lib/commands/tab.mjs';
 
 const config = loadConfig();
-const SERVER_INFO = { name: 'chromex', version: '1.4.0' };
+const SERVER_INFO = { name: 'chromex', version: '1.5.0' };
 
 // ---- JSON-RPC helpers ----
 
@@ -55,6 +55,7 @@ function tool(name, description, properties, required, annotations) {
 
 const P_TARGET = { type: 'string', description: 'Target ID prefix from chromex_list' };
 const P_NO_SNAP = { type: 'boolean', description: 'Skip auto-snapshot after action' };
+const P_NO_HINTS = { type: 'boolean', description: 'Skip contextual help[] suggestions in output' };
 
 // ---- Tool definitions (56 tools) ----
 
@@ -102,12 +103,14 @@ const TOOLS = [
 
   // == INSPECT (readOnly) ==
   tool('chromex_snapshot',
-    'Accessibility tree snapshot. Returns incremental diff after first call (only changed nodes). Use refs=true to get @eN references for click/fill/hover.',
+    'Accessibility tree snapshot. Returns incremental diff after first call (only changed nodes). Use refs=true to get @eN references for click/fill/hover. Use query to filter to matching nodes + ancestors (preserves hierarchy, slashes page output for large sites). Hints (help[]) are only emitted when refs=true because they rely on a fresh refMap.',
     {
       target: P_TARGET,
       refs: { type: 'boolean', description: 'Assign @eN refs to interactive elements', default: false },
       full: { type: 'boolean', description: 'Force full snapshot (skip incremental diff)', default: false },
       depth: { type: 'number', description: 'Max tree depth (0 = unlimited)' },
+      query: { type: 'string', description: 'Filter tree to nodes matching substring (case-insensitive) in role/name/value. Ancestors preserved so hierarchy is intact. @eN refs stay stable.' },
+      noHints: P_NO_HINTS,
     }, ['target'], RO),
 
   tool('chromex_html',
@@ -185,6 +188,7 @@ const TOOLS = [
       target: P_TARGET,
       url: { type: 'string', description: 'URL, or action: "back", "forward", "reload", "reload-hard"' },
       noSnap: P_NO_SNAP,
+      noHints: P_NO_HINTS,
     }, ['target', 'url'], RW),
 
   tool('chromex_waitfor',
@@ -219,6 +223,7 @@ const TOOLS = [
       selector: { type: 'string', description: 'CSS selector or @eN ref' },
       dblClick: { type: 'boolean', description: 'Double-click instead of single click', default: false },
       noSnap: P_NO_SNAP,
+      noHints: P_NO_HINTS,
     }, ['target', 'selector'], RW),
 
   tool('chromex_clickxy',
@@ -229,6 +234,7 @@ const TOOLS = [
       y: { type: 'number', description: 'Y in CSS pixels' },
       dblClick: { type: 'boolean', description: 'Double-click instead of single click', default: false },
       noSnap: P_NO_SNAP,
+      noHints: P_NO_HINTS,
     }, ['target', 'x', 'y'], RW),
 
   tool('chromex_type',
@@ -237,6 +243,7 @@ const TOOLS = [
       target: P_TARGET,
       text: { type: 'string', description: 'Text to type' },
       noSnap: P_NO_SNAP,
+      noHints: P_NO_HINTS,
     }, ['target', 'text'], RW),
 
   tool('chromex_hover',
@@ -253,6 +260,7 @@ const TOOLS = [
       from: { type: 'string', description: 'Source selector or x,y' },
       to: { type: 'string', description: 'Destination selector or x,y' },
       noSnap: P_NO_SNAP,
+      noHints: P_NO_HINTS,
     }, ['target', 'from', 'to'], RW),
 
   tool('chromex_touch',
@@ -262,6 +270,7 @@ const TOOLS = [
       gesture: { type: 'string', enum: ['tap', 'swipe', 'pinch', 'longpress'], description: 'Gesture type' },
       args: { type: 'array', items: { type: 'string' }, description: 'Gesture args: tap(x,y), swipe(x1,y1,x2,y2), pinch(x,y,scale), longpress(x,y,[ms])' },
       noSnap: P_NO_SNAP,
+      noHints: P_NO_HINTS,
     }, ['target', 'gesture'], RW),
 
   tool('chromex_dialog',
@@ -271,6 +280,7 @@ const TOOLS = [
       action: { type: 'string', enum: ['accept', 'dismiss', 'auto'], description: 'Dialog action' },
       text: { type: 'string', description: 'Text for prompt (only with accept)' },
       noSnap: P_NO_SNAP,
+      noHints: P_NO_HINTS,
     }, ['target', 'action'], RW),
 
   tool('chromex_press_key',
@@ -279,6 +289,7 @@ const TOOLS = [
       target: P_TARGET,
       key: { type: 'string', description: 'Key or combination: "Enter", "Tab", "Escape", "Control+A", "Control+Shift+R", "Meta+C"' },
       noSnap: P_NO_SNAP,
+      noHints: P_NO_HINTS,
     }, ['target', 'key'], RW),
 
   tool('chromex_loadall',
@@ -288,6 +299,7 @@ const TOOLS = [
       selector: { type: 'string', description: 'CSS selector of load-more button' },
       interval: { type: 'number', description: 'Interval between clicks in ms (default: 1500)' },
       noSnap: P_NO_SNAP,
+      noHints: P_NO_HINTS,
     }, ['target', 'selector'], RW),
 
   // == FORMS ==
@@ -298,6 +310,7 @@ const TOOLS = [
       selector: { type: 'string', description: 'CSS selector or @eN ref' },
       value: { type: 'string', description: 'Value to fill' },
       noSnap: P_NO_SNAP,
+      noHints: P_NO_HINTS,
     }, ['target', 'selector', 'value'], RW),
 
   tool('chromex_clear',
@@ -306,6 +319,7 @@ const TOOLS = [
       target: P_TARGET,
       selector: { type: 'string', description: 'CSS selector' },
       noSnap: P_NO_SNAP,
+      noHints: P_NO_HINTS,
     }, ['target', 'selector'], RW),
 
   tool('chromex_select',
@@ -315,6 +329,7 @@ const TOOLS = [
       selector: { type: 'string', description: 'CSS selector of select element' },
       value: { type: 'string', description: 'Option value or visible text' },
       noSnap: P_NO_SNAP,
+      noHints: P_NO_HINTS,
     }, ['target', 'selector', 'value'], RW),
 
   tool('chromex_check',
@@ -324,6 +339,7 @@ const TOOLS = [
       selector: { type: 'string', description: 'CSS selector' },
       checked: { type: 'boolean', description: 'Desired state (default: true)', default: true },
       noSnap: P_NO_SNAP,
+      noHints: P_NO_HINTS,
     }, ['target', 'selector'], RW),
 
   tool('chromex_form',
@@ -332,6 +348,7 @@ const TOOLS = [
       target: P_TARGET,
       fields: { type: 'string', description: 'JSON: {"#email":"user@test.com","#terms":true}' },
       noSnap: P_NO_SNAP,
+      noHints: P_NO_HINTS,
     }, ['target', 'fields'], RW),
 
   tool('chromex_upload',
@@ -341,6 +358,7 @@ const TOOLS = [
       selector: { type: 'string', description: 'CSS selector of file input' },
       files: { type: 'array', items: { type: 'string' }, description: 'File path(s)' },
       noSnap: P_NO_SNAP,
+      noHints: P_NO_HINTS,
     }, ['target', 'selector', 'files'], RW),
 
   // == DATA ==
@@ -516,6 +534,7 @@ function toolToCmd(name, p) {
       if (p.refs) a.push('--refs');
       if (p.full) a.push('--full');
       if (p.depth) a.push(`--depth=${p.depth}`);
+      if (p.query) a.push(`--query=${p.query}`);
       return { cmd: 'snap', args: a };
     }
     case 'chromex_html':       return { cmd: 'html', args: p.selector ? [p.selector] : [] };
@@ -713,6 +732,7 @@ async function executeTool(name, params) {
   if (!mapped) return fail(`Unknown tool: ${name}`);
 
   if (params.noSnap) mapped.args.push('--no-snap');
+  if (params.noHints) mapped.args.push('--no-hints');
 
   const conn = await getOrStartTabDaemon(targetId, config);
   const response = await sendCommand(conn, { cmd: mapped.cmd, args: mapped.args });

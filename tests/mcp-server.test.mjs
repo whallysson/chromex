@@ -67,7 +67,7 @@ describe('MCP Protocol', () => {
     expect(r.result.protocolVersion).toBe('2025-03-26');
     expect(r.result.capabilities).toEqual({ tools: {} });
     expect(r.result.serverInfo.name).toBe('chromex');
-    expect(r.result.serverInfo.version).toBe('1.4.0');
+    expect(r.result.serverInfo.version).toBe('1.5.0');
   });
 
   it('tools/list returns 56 tools', async () => {
@@ -79,6 +79,43 @@ describe('MCP Protocol', () => {
     const r = findById(responses, 1);
     expect(r).toBeDefined();
     expect(r.result.tools).toHaveLength(56);
+  });
+
+  it('noHints is declared on all tools that accept noSnap (P2 regression guard)', async () => {
+    // P2 bug: noHints was accepted at runtime but missing from the schema,
+    // making it invisible to strict MCP clients. Every tool that accepts noSnap
+    // must also declare noHints so the contract stays consistent.
+    const responses = await mcpSession([
+      INIT,
+      INITIALIZED,
+      { jsonrpc: '2.0', id: 1, method: 'tools/list' },
+    ]);
+    const tools = findById(responses, 1).result.tools;
+
+    const toolsWithNoSnap = tools.filter((t) => t.inputSchema?.properties?.noSnap);
+    expect(toolsWithNoSnap.length).toBeGreaterThanOrEqual(15);
+
+    for (const tool of toolsWithNoSnap) {
+      expect(
+        tool.inputSchema.properties.noHints,
+        `tool ${tool.name} has noSnap but is missing noHints in schema`
+      ).toBeDefined();
+      expect(tool.inputSchema.properties.noHints.type).toBe('boolean');
+    }
+  });
+
+  it('chromex_snapshot exposes query, noHints and refs in schema', async () => {
+    const responses = await mcpSession([
+      INIT,
+      INITIALIZED,
+      { jsonrpc: '2.0', id: 1, method: 'tools/list' },
+    ]);
+    const tool = findById(responses, 1).result.tools.find((t) => t.name === 'chromex_snapshot');
+    expect(tool).toBeDefined();
+    expect(tool.inputSchema.properties.query).toBeDefined();
+    expect(tool.inputSchema.properties.query.type).toBe('string');
+    expect(tool.inputSchema.properties.noHints).toBeDefined();
+    expect(tool.inputSchema.properties.refs).toBeDefined();
   });
 
   it('ping returns empty object', async () => {

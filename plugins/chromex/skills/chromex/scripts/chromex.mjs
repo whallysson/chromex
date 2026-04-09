@@ -51,7 +51,11 @@ Usage: chromex <command> [args]
     incognito [url]                     Create isolated browser context (no relaunch)
 
   INSPECT
-    snap    <target>                    Accessibility tree snapshot (compact)
+    snap    <target> [options]          Accessibility tree snapshot (compact)
+      --refs                            Assign @eN refs to interactive elements
+      --full                            Force full snapshot (skip incremental diff)
+      --depth=N                         Limit tree depth (nodes at limit render as leaves)
+      --query=TEXT                      Filter to nodes matching substring + ancestors
     html    <target> [selector]         Get HTML (full page or CSS selector)
     shot    <target> [file] [options]   Screenshot (viewport, full page, or element)
       --full                            Full page capture
@@ -265,7 +269,8 @@ async function main() {
   const conn = await getOrStartTabDaemon(targetId, config);
 
   const noSnap = args.includes('--no-snap');
-  const cmdArgs = args.slice(1).filter(a => a !== '--no-snap');
+  const noHints = args.includes('--no-hints');
+  const cmdArgs = args.slice(1).filter(a => a !== '--no-snap' && a !== '--no-hints');
 
   // Juntar argumentos para comandos que aceitam texto livre
   if (cmd === 'eval') {
@@ -300,6 +305,7 @@ async function main() {
   }
 
   if (noSnap) cmdArgs.push('--no-snap');
+  if (noHints) cmdArgs.push('--no-hints');
   const response = await sendCommand(conn, { cmd, args: cmdArgs });
 
   if (response.ok) {
