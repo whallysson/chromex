@@ -47,6 +47,7 @@
     "node": ">=22.0.0"
   },
   "devDependencies": {
+    "js-tiktoken": "^1.0.21",
     "vitest": "^3.0.0"
   }
 }
