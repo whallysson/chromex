@@ -4,9 +4,9 @@
   "description": "Zero-dependency Chrome DevTools Protocol MCP server for AI agents. 56 typed tools, per-tab daemons, security hardened, contextual hints, query-filtered snapshots.",
   "type": "module",
   "bin": {
-    "chromex": "./bin/chromex.mjs",
-    "chromex-mcp": "./bin/chromex-mcp.mjs",
-    "chromex-cli": "./bin/chromex-cli.mjs"
+    "chromex": "bin/chromex.mjs",
+    "chromex-mcp": "bin/chromex-mcp.mjs",
+    "chromex-cli": "bin/chromex-cli.mjs"
   },
   "files": [
     "bin/",
@@ -40,7 +40,7 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/whallysson/chromex"
+    "url": "git+https://github.com/whallysson/chromex.git"
   },
   "homepage": "https://github.com/whallysson/chromex#mcp-server-recommended-for-claude-code",
   "engines": {
