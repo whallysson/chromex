@@ -12,9 +12,10 @@ import { resolvePrefix, listDaemonSockets } from './lib/utils.mjs';
 import { getOrStartTabDaemon, sendCommand, stopDaemons, checkTargetDomain } from './lib/ipc.mjs';
 import { launchBrowser, incognitoContext } from './lib/launcher.mjs';
 import { openTabStr, closeTabStr, focusTabStr } from './lib/commands/tab.mjs';
+import { doctorStr } from './lib/commands/doctor.mjs';
 
 const config = loadConfig();
-const SERVER_INFO = { name: 'chromex', version: '1.5.0' };
+const SERVER_INFO = { name: 'chromex', version: '1.6.0' };
 
 // ---- JSON-RPC helpers ----
 
@@ -57,7 +58,7 @@ const P_TARGET = { type: 'string', description: 'Target ID prefix from chromex_l
 const P_NO_SNAP = { type: 'boolean', description: 'Skip auto-snapshot after action' };
 const P_NO_HINTS = { type: 'boolean', description: 'Skip contextual help[] suggestions in output' };
 
-// ---- Tool definitions (56 tools) ----
+// ---- Tool definitions (73 tools) ----
 
 const TOOLS = [
   // == PAGES (no daemon) ==
@@ -70,6 +71,7 @@ const TOOLS = [
     {
       incognito: { type: 'boolean', description: 'Launch in incognito mode' },
       browser: { type: 'string', enum: ['chrome', 'brave', 'edge', 'chromium', 'chrome-canary', 'vivaldi'], description: 'Browser to launch' },
+      browserPath: { type: 'string', description: 'Explicit Chromium executable path. Also supported through CHROMEX_BROWSER_PATH.' },
       profile: { type: 'string', description: 'Named profile directory' },
       url: { type: 'string', description: 'URL to open on launch' },
       headless: { type: 'boolean', description: 'Launch in headless mode (no UI)' },
@@ -77,6 +79,10 @@ const TOOLS = [
       insecure: { type: 'boolean', description: 'Ignore certificate errors' },
       chromeArgs: { type: 'array', items: { type: 'string' }, description: 'Additional Chrome flags to pass through' },
     }, [], RW),
+
+  tool('chromex_doctor',
+    'Diagnose local Chromex browser/CDP connectivity, config paths, DevToolsActivePort discovery, and visible pages.',
+    {}, [], RO),
 
   tool('chromex_open',
     'Open a new browser tab.',
@@ -377,6 +383,108 @@ const TOOLS = [
       action: { type: 'string', enum: ['local', 'session', 'clear'], description: 'Storage action' },
     }, ['target', 'action'], RW),
 
+  tool('chromex_storage_usage',
+    'Show origin storage usage, quota, and per-storage-type breakdown.',
+    { target: P_TARGET }, ['target'], RO),
+
+  tool('chromex_storage_clear_site_data',
+    'Clear all site data for the current origin through CDP Storage.clearDataForOrigin.',
+    { target: P_TARGET }, ['target'], DESTRUCTIVE),
+
+  tool('chromex_app_summary',
+    'Summarize Application panel state for the current origin: quota, local/session storage, cookies, Cache Storage entries, IndexedDB, Service Workers, storage buckets, and manifest.',
+    { target: P_TARGET }, ['target'], RO),
+
+  tool('chromex_service_workers',
+    'List Service Worker registrations and versions observed for the current browser session.',
+    { target: P_TARGET }, ['target'], RO),
+
+  tool('chromex_service_worker_update',
+    'Request an update check for a Service Worker registration scopeURL.',
+    {
+      target: P_TARGET,
+      scopeURL: { type: 'string', description: 'Service Worker registration scope URL' },
+    }, ['target', 'scopeURL'], RW),
+
+  tool('chromex_service_worker_skip_waiting',
+    'Ask a waiting Service Worker for scopeURL to activate via skipWaiting.',
+    {
+      target: P_TARGET,
+      scopeURL: { type: 'string', description: 'Service Worker registration scope URL' },
+    }, ['target', 'scopeURL'], RW),
+
+  tool('chromex_service_worker_unregister',
+    'Unregister a Service Worker registration by scopeURL.',
+    {
+      target: P_TARGET,
+      scopeURL: { type: 'string', description: 'Service Worker registration scope URL' },
+    }, ['target', 'scopeURL'], DESTRUCTIVE),
+
+  tool('chromex_cache_list',
+    'List Cache Storage caches for the current origin with cache IDs and names.',
+    { target: P_TARGET }, ['target'], RO),
+
+  tool('chromex_cache_entries',
+    'List entries for a Cache Storage cache. cacheId may be a unique prefix from chromex_cache_list.',
+    {
+      target: P_TARGET,
+      cacheId: { type: 'string', description: 'Cache ID or unique cache ID prefix' },
+      limit: { type: 'number', description: 'Maximum entries to return (default 20, max 100)' },
+      query: { type: 'string', description: 'Optional substring filter for request path, equivalent to CLI --query=/api' },
+      pathFilter: { type: 'string', description: 'Deprecated alias for query' },
+    }, ['target', 'cacheId'], RO),
+
+  tool('chromex_cache_body',
+    'Read the decoded body preview for one Cache Storage request URL.',
+    {
+      target: P_TARGET,
+      cacheId: { type: 'string', description: 'Cache ID or unique cache ID prefix' },
+      requestURL: { type: 'string', description: 'Cached request URL' },
+    }, ['target', 'cacheId', 'requestURL'], RO),
+
+  tool('chromex_cache_delete_entry',
+    'Delete one Cache Storage entry by cacheId and requestURL.',
+    {
+      target: P_TARGET,
+      cacheId: { type: 'string', description: 'Cache ID or unique cache ID prefix' },
+      requestURL: { type: 'string', description: 'Cached request URL to delete' },
+    }, ['target', 'cacheId', 'requestURL'], DESTRUCTIVE),
+
+  tool('chromex_cache_delete',
+    'Delete an entire Cache Storage cache by cacheId.',
+    {
+      target: P_TARGET,
+      cacheId: { type: 'string', description: 'Cache ID or unique cache ID prefix' },
+    }, ['target', 'cacheId'], DESTRUCTIVE),
+
+  tool('chromex_indexeddb_list',
+    'List IndexedDB database names for the current origin.',
+    { target: P_TARGET }, ['target'], RO),
+
+  tool('chromex_indexeddb_schema',
+    'Show object stores, key paths, auto-increment flags, and indexes for an IndexedDB database.',
+    {
+      target: P_TARGET,
+      databaseName: { type: 'string', description: 'IndexedDB database name' },
+    }, ['target', 'databaseName'], RO),
+
+  tool('chromex_indexeddb_rows',
+    'Read a compact preview of rows from an IndexedDB object store.',
+    {
+      target: P_TARGET,
+      databaseName: { type: 'string', description: 'IndexedDB database name' },
+      objectStoreName: { type: 'string', description: 'Object store name' },
+      limit: { type: 'number', description: 'Maximum rows to return (default 20, max 100)' },
+    }, ['target', 'databaseName', 'objectStoreName'], RO),
+
+  tool('chromex_indexeddb_clear_store',
+    'Clear all rows from one IndexedDB object store.',
+    {
+      target: P_TARGET,
+      databaseName: { type: 'string', description: 'IndexedDB database name' },
+      objectStoreName: { type: 'string', description: 'Object store name' },
+    }, ['target', 'databaseName', 'objectStoreName'], DESTRUCTIVE),
+
   tool('chromex_pdf',
     'Export page as PDF.',
     {
@@ -589,6 +697,28 @@ function toolToCmd(name, p) {
     // Data
     case 'chromex_cookies':    return { cmd: 'cookies', args: [p.action || 'list', ...(p.arg ? [p.arg] : [])] };
     case 'chromex_storage':    return { cmd: 'storage', args: [p.action] };
+    case 'chromex_storage_usage': return { cmd: 'storage', args: ['usage'] };
+    case 'chromex_storage_clear_site_data': return { cmd: 'storage', args: ['clear-site-data'] };
+    case 'chromex_app_summary': return { cmd: 'app', args: ['summary'] };
+    case 'chromex_service_workers': return { cmd: 'sw', args: ['list'] };
+    case 'chromex_service_worker_update': return { cmd: 'sw', args: ['update', p.scopeURL] };
+    case 'chromex_service_worker_skip_waiting': return { cmd: 'sw', args: ['skip-waiting', p.scopeURL] };
+    case 'chromex_service_worker_unregister': return { cmd: 'sw', args: ['unregister', p.scopeURL] };
+    case 'chromex_cache_list': return { cmd: 'cache', args: ['list'] };
+    case 'chromex_cache_entries': {
+      const query = p.query || p.pathFilter || '';
+      const args = ['entries', p.cacheId];
+      if (p.limit != null) args.push(`--limit=${p.limit}`);
+      if (query) args.push(`--query=${query}`);
+      return { cmd: 'cache', args };
+    }
+    case 'chromex_cache_body': return { cmd: 'cache', args: ['body', p.cacheId, p.requestURL] };
+    case 'chromex_cache_delete_entry': return { cmd: 'cache', args: ['delete-entry', p.cacheId, p.requestURL] };
+    case 'chromex_cache_delete': return { cmd: 'cache', args: ['delete', p.cacheId] };
+    case 'chromex_indexeddb_list': return { cmd: 'idb', args: ['list'] };
+    case 'chromex_indexeddb_schema': return { cmd: 'idb', args: ['schema', p.databaseName] };
+    case 'chromex_indexeddb_rows': return { cmd: 'idb', args: ['rows', p.databaseName, p.objectStoreName, p.limit != null ? `--limit=${p.limit}` : ''].filter(Boolean) };
+    case 'chromex_indexeddb_clear_store': return { cmd: 'idb', args: ['clear', p.databaseName, p.objectStoreName] };
     case 'chromex_pdf':        return { cmd: 'pdf', args: p.filePath ? [p.filePath] : [] };
 
     // Network
@@ -660,7 +790,7 @@ async function resolveTarget(prefix) {
 
 // Commands that use direct CDP (no daemon)
 const NO_DAEMON = new Set([
-  'chromex_list', 'chromex_launch', 'chromex_open', 'chromex_close',
+  'chromex_list', 'chromex_launch', 'chromex_doctor', 'chromex_open', 'chromex_close',
   'chromex_focus', 'chromex_incognito', 'chromex_stop',
 ]);
 
@@ -692,6 +822,10 @@ async function executeTool(name, params) {
   if (name === 'chromex_launch') {
     const result = await launchBrowser(params);
     return ok(result);
+  }
+
+  if (name === 'chromex_doctor') {
+    return ok(await doctorStr(config));
   }
 
   if (name === 'chromex_open') {

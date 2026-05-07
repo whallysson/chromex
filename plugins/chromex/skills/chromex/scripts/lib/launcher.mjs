@@ -1,4 +1,4 @@
-// Browser launcher -- abre Chrome/Brave/Edge com remote debugging habilitado
+// Browser launcher -- opens Chrome/Brave/Edge with remote debugging enabled
 import { existsSync } from 'fs';
 import { spawn } from 'child_process';
 import { resolve } from 'path';
@@ -31,9 +31,15 @@ export async function launchBrowser(options = {}) {
   const paths = BROWSER_PATHS[platform];
   if (!paths) throw new Error(`Unsupported platform: ${process.platform}`);
 
-  // Encontrar browser
+  // Resolve browser executable
   let browserPath;
-  if (options.browser) {
+  const explicitBrowserPath = options.browserPath || process.env.CHROMEX_BROWSER_PATH;
+  if (explicitBrowserPath) {
+    browserPath = explicitBrowserPath;
+    if ((platform === 'darwin' || browserPath.includes('/')) && !existsSync(browserPath)) {
+      throw new Error(`Browser not found: ${browserPath}`);
+    }
+  } else if (options.browser) {
     browserPath = paths[options.browser.toLowerCase()];
     if (!browserPath) {
       throw new Error(`Unknown browser: ${options.browser}. Available: ${Object.keys(paths).join(', ')}`);
@@ -42,7 +48,7 @@ export async function launchBrowser(options = {}) {
       throw new Error(`Browser not found: ${browserPath}`);
     }
   } else {
-    // Auto-detect: tentar na ordem
+    // Auto-detect in preference order
     for (const path of Object.values(paths)) {
       if (platform === 'darwin' ? existsSync(path) : true) {
         browserPath = path;
@@ -53,7 +59,7 @@ export async function launchBrowser(options = {}) {
   }
 
   const flags = [
-    '--remote-debugging-port=0', // Porta aleatória, Chrome escreve no DevToolsActivePort
+    '--remote-debugging-port=0', // Random port; Chrome writes it to DevToolsActivePort
     '--no-first-run',
     '--no-default-browser-check',
   ];
@@ -81,7 +87,7 @@ export async function launchBrowser(options = {}) {
   });
   child.unref();
 
-  // Aguardar DevToolsActivePort aparecer
+  // Wait for DevToolsActivePort to appear
   const maxWait = 10000;
   const start = Date.now();
   while (Date.now() - start < maxWait) {
@@ -89,12 +95,13 @@ export async function launchBrowser(options = {}) {
       const wsUrl = getWsUrl();
       if (wsUrl) {
         const lines = [`Browser launched (PID: ${child.pid})`];
+        if (explicitBrowserPath) lines.push(`Browser path: ${browserPath}`);
         if (options.incognito) lines.push('Mode: incognito');
         if (options.profile) lines.push(`Profile: ${options.profile}`);
         lines.push(`Remote debugging active`);
         return lines.join('\n');
       }
-    } catch { /* aguardando */ }
+    } catch { /* waiting */ }
     await sleep(500);
   }
 

@@ -1,12 +1,12 @@
 ---
 name: chromex
 description: "Interact with local Chromium browser session via CDP. Use when asked to inspect, debug, test, scrape, fill forms, take screenshots, or interact with a page open in Chrome/Brave/Edge. Only on explicit user approval. Triggers for: 'inspect page', 'take screenshot', 'fill form', 'check browser', 'debug page', 'web vitals', 'browser automation'."
-version: 1.5.0
+version: 1.6.0
 ---
 
 # Chromex -- Chrome DevTools Protocol CLI
 
-Zero-dependency CDP CLI for AI agents. Connects to Chrome/Brave/Edge via WebSocket. Per-tab persistent daemons, security hardened, 56 MCP tools.
+Zero-dependency CDP CLI for AI agents. Connects to Chrome/Brave/Edge via WebSocket. Per-tab persistent daemons, security hardened, 73 MCP tools.
 
 ## Prerequisites
 
@@ -47,6 +47,8 @@ chromex.mjs launch  --headless --url URL            # headless mode for CI/CD
 chromex.mjs launch  --proxy socks5://host:port      # launch with proxy
 chromex.mjs launch  --insecure                      # ignore certificate errors
 chromex.mjs launch  --chrome-arg FLAG               # pass custom Chrome flag
+chromex.mjs launch  --browser-path PATH             # explicit Chromium executable
+chromex.mjs doctor                                  # diagnose CDP connectivity
 chromex.mjs incognito [url]                         # isolated context (no relaunch)
 chromex.mjs stop    [target]                        # stop daemon(s)
 ```
@@ -123,7 +125,12 @@ chromex.mjs upload  <target> <selector> <files> # upload file(s) to input[type=f
 
 ```bash
 chromex.mjs cookies <target> [list|set|clear]   # cookie management
-chromex.mjs storage <target> local|session|clear # browser storage
+chromex.mjs storage <target> local|session|clear|usage|clear-site-data
+chromex.mjs app     <target> summary            # Application state summary
+chromex.mjs sw      <target> [action] [scope]   # Service Workers
+chromex.mjs cache   <target> entries <cacheId> --query=/api
+chromex.mjs idb     <target> rows <db> <store> --limit=20
+chromex.mjs idb     <target> clear <db> <store>
 chromex.mjs pdf     <target> [file]             # export as PDF
 ```
 

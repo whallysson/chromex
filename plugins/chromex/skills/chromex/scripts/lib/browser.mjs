@@ -1,11 +1,11 @@
-// Detecção de browser e listagem de páginas
+// Browser detection and page listing
 import { readFileSync, existsSync } from 'fs';
 import { resolve } from 'path';
 import { homedir } from 'os';
 import { checkDomain } from './security.mjs';
 import { getDisplayPrefixLength } from './utils.mjs';
 
-// Gera candidatos para cada browser: path base + Default/ subfolder
+// Generate candidates for each browser: base path plus Default/ subfolder
 function candidates(base) {
   return [resolve(base, 'DevToolsActivePort'), resolve(base, 'Default/DevToolsActivePort')];
 }
@@ -31,14 +31,16 @@ const DEVTOOLS_CANDIDATES = [
   ...candidates(resolve(home, '.config/vivaldi')),
 ];
 
-export function getWsUrl() {
-  // Override via env var para setups não-padrão
+export function findDevToolsPortFile() {
   if (process.env.CDP_PORT_FILE && existsSync(process.env.CDP_PORT_FILE)) {
-    const lines = readFileSync(process.env.CDP_PORT_FILE, 'utf8').trim().split('\n');
-    return `ws://127.0.0.1:${lines[0]}${lines[1]}`;
+    return process.env.CDP_PORT_FILE;
   }
+  return DEVTOOLS_CANDIDATES.find(path => existsSync(path)) || null;
+}
 
-  const portFile = DEVTOOLS_CANDIDATES.find(path => existsSync(path));
+export function getWsUrl() {
+  // Env override for non-standard setups
+  const portFile = findDevToolsPortFile();
   if (!portFile) {
     throw new Error(
       'Could not find DevToolsActivePort file.\n' +

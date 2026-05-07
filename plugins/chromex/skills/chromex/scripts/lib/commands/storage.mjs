@@ -2,6 +2,7 @@
 
 import { evalStr } from './evaluate.mjs';
 import { emptyState } from '../output.mjs';
+import { clearSiteDataStr, storageUsageStr } from './app.mjs';
 
 export async function storageStr(cdp, sid, action) {
   switch (action) {
@@ -42,7 +43,13 @@ export async function storageStr(cdp, sid, action) {
       return 'Cleared localStorage and sessionStorage.';
     }
 
+    case 'usage':
+      return storageUsageStr(cdp, sid);
+
+    case 'clear-site-data':
+      return clearSiteDataStr(cdp, sid);
+
     default:
-      throw new Error(`Unknown storage action: ${action}. Use: local, session, clear`);
+      throw new Error(`Unknown storage action: ${action}. Use: local, session, clear, usage, clear-site-data`);
   }
 }

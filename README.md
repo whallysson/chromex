@@ -1,46 +1,226 @@
 # Chromex
 
-Zero-dependency Chrome DevTools Protocol toolkit for AI agents. 56 typed MCP tools + CLI. Connects directly to Chrome, Brave, Edge, or Chromium via WebSocket. No Puppeteer, no bloat.
+[![npm version](https://img.shields.io/npm/v/chromex-mcp.svg)](https://www.npmjs.com/package/chromex-mcp)
+[![Node.js 22+](https://img.shields.io/badge/node-%3E%3D22.0.0-brightgreen.svg)](https://nodejs.org/)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-Designed from the ground up for token efficiency: incremental diffs, query-filtered snapshots, ref-based selection, and a plain-text output format that consistently beats JSON and YAML-style structured alternatives by 25% to 126% in head-to-head token measurements (see [Token Efficiency](#token-efficiency) below).
+Chromex is a zero-dependency Chrome DevTools Protocol toolkit for AI agents. It connects directly to Chrome, Brave, Edge, Chromium, and Vivaldi through CDP, exposing a token-efficient CLI and an optional MCP server with 73 typed tools.
 
-## Features
+Use Chromex when an agent needs to inspect pages, take screenshots, navigate, click, fill forms, read console/network activity, emulate devices, throttle network/CPU, export PDFs, or run browser diagnostics without pulling in Puppeteer or Playwright.
 
-- **56 MCP tools** -- typed JSON Schema, annotations (`readOnlyHint`, `destructiveHint`), inline screenshots (base64)
-- **Zero dependencies** -- uses only Node.js 22+ built-in modules (WebSocket, fs, net, crypto)
-- **Ref-based selection** -- `snap --refs` assigns `@e1`, `@e2`... to interactive elements, then `click @e5` or `fill @e3 "value"`. No fragile CSS selectors
-- **Incremental snapshots** -- second snapshot returns only changed nodes (diff), reducing output from thousands of lines to just what changed
-- **Query-filtered snapshots** -- `snap --query=login` returns only matching nodes and their ancestors, cutting output by 95% to 99% on large pages like GitHub, Jira, or Gmail
-- **Auto-snapshot** -- interactive commands (click, fill, nav, etc.) automatically append an incremental snapshot with refs, so the agent sees the page state in a single round-trip
-- **Contextual hints** -- after each action, chromex appends up to 3 `help[]` next-step suggestions picked from the current ref map, eliminating the "what do I do next" turn. Opt-out with `--no-hints`
-- **Pre-computed aggregates** -- `net` and `console` outputs embed counters (`network[47] errors:3 pending:0 ok:44`, `console[12] errors:2 warnings:4 info:6`) so the agent never needs a follow-up count
-- **Scroll detection** -- snapshots report scrollable containers with remaining distance (`[scroll: page: down:1200px | sidebar: up:300px]`)
-- **Per-tab persistent daemons** -- each tab gets a background process connected via Unix socket. Chrome's "Allow debugging" modal fires once, not on every command
-- **Security hardened** -- domain filtering (allow/blocklist), CDP method blocklist, token-authenticated sockets, full audit log
-- **Multi-browser** -- auto-detects Brave, Chrome, Chrome Canary, Chromium, Edge, Vivaldi (macOS + Linux)
-- **Network control** -- throttle to 3G/offline, intercept & mock requests, record HAR files
-- **Form filling** -- fill inputs, select dropdowns, toggle checkboxes, upload files, batch fill entire forms. Works with React/Vue/Angular
-- **Browser launcher** -- launch browser with remote debugging pre-enabled (skips the "Allow debugging" modal entirely)
-- **CLI included** -- same commands available from the terminal for scripts and CI/CD
+## Why Chromex
+
+- **CLI-first for lower token usage**: terminal commands return compact plain text and avoid MCP tool-schema overhead.
+- **Optional MCP server**: 73 typed tools for Claude Code and other MCP clients when tool discovery, typed parameters, and inline screenshots matter more than token budget.
+- **No runtime dependencies**: Node.js 22+ built-ins only, including native WebSocket support.
+- **Agent-friendly page model**: accessibility snapshots, `@eN` refs, incremental diffs, query filters, auto-snapshots, and contextual hints.
+- **Persistent per-tab daemons**: one CDP session per tab, held open through an authenticated Unix socket.
+- **Security controls**: domain allow/block lists, CDP method blocklist, socket auth, command timeouts, and audit logs.
+- **Local by default**: no hosted service, no telemetry client, no bundled browser download, and session stats stay on your machine.
+
+## What You Can Do Today
+
+- Inspect and automate real logged-in browser sessions, not only fresh headless test contexts.
+- Read page state through compact accessibility snapshots, filtered snapshots, DOM snapshots, HTML, screenshots, and highlighted elements.
+- Act on UI through refs, CSS selectors, coordinates, keyboard input, forms, uploads, drag and drop, touch gestures, dialogs, and load-more loops.
+- Debug production behavior with console history, network request details, response bodies, HAR export, request blocking, API mocking, throttling, and offline mode.
+- Test browser conditions with device presets, viewport resizing, DPR, geolocation, timezone, locale, CPU throttling, incognito contexts, proxies, and custom Chrome flags.
+- Diagnose performance and quality with Core Web Vitals, transfer size, DOM/memory counters, Lighthouse audits, JS/CSS coverage, Chrome traces, and heap snapshots.
+- Validate modern browser flows such as passkey/WebAuthn registration and login, downloads, cookies, storage, PDF export, and isolated profiles.
+- Inspect Application panel state from the terminal: origin quota, storage usage breakdown, Cache Storage entries/bodies, IndexedDB schemas/rows, and Service Worker registrations.
+
+## Positioning
+
+Chromex is a direct CDP layer for coding agents. It sits between raw Chrome DevTools Protocol and heavier browser automation frameworks.
+
+| Alternative | Trade-off | Chromex angle |
+|-------------|-----------|---------------|
+| Raw CDP WebSocket | Maximum browser power, but too verbose for agents. | Compact commands, refs, snapshots, and safety defaults. |
+| Puppeteer or Playwright libraries | Excellent automation frameworks, but they add dependencies and framework-level abstractions. | Zero-runtime-dependency CLI/MCP that talks to your existing Chromium browser. |
+| Browser MCP only | Easy tool discovery, but tool schemas and structured responses add token cost. | CLI-first for cheap agent loops, MCP when typed tools are worth the overhead. |
+| Manual DevTools | Great for humans, not scriptable enough for agents. | DevTools-grade inspection exposed as terminal and MCP commands. |
 
 ## Requirements
 
-- Node.js 22+ (for built-in WebSocket)
-- Any Chromium-based browser
+- Node.js 22 or newer.
+- macOS or Linux.
+- A Chromium-based browser: Chrome, Brave, Edge, Chromium, Chrome Canary, or Vivaldi.
 
-## Installation
+## Zero-Dependency Boundary
+
+The core runtime uses only Node.js built-in modules. Chromex does not install Puppeteer, Playwright, Selenium, browser drivers, telemetry SDKs, update checkers, or bundled browsers.
+
+The only exception is the optional `audit` command: it shells out to Lighthouse with `npx --yes lighthouse` when you explicitly run an audit. All other CLI and MCP commands run through Chromex's own CDP client.
+
+Development dependencies are used only for tests and token benchmarks.
+
+## Browser Setup
+
+Chromex needs Chrome DevTools Protocol access to your browser. Choose one of the two connection modes below before using the CLI or MCP server.
+
+### Option A: Launch a Browser with Chromex
+
+This is the recommended first-time setup. Chromex starts a new browser process with remote debugging already enabled, so there is no manual browser configuration and no "Allow debugging" prompt.
 
 ```bash
-# Add to Claude Code (global -- all projects)
-claude mcp add chromex -s user npx chromex-mcp@latest
-
-# Or project-only
-claude mcp add chromex npx chromex-mcp@latest
+chromex launch --url https://example.com
 ```
 
-### Auto-Approve (recommended)
+Useful launch variants:
 
-Add to `~/.claude/settings.json`:
+```bash
+chromex launch --browser brave --url https://example.com
+chromex launch --profile testing --url https://example.com
+chromex launch --incognito --browser chrome
+chromex launch --headless --url https://example.com
+chromex launch --browser-path "/Applications/Google Chrome Canary.app/Contents/MacOS/Google Chrome Canary"
+```
+
+Named profiles are stored under `~/.chromex/profiles/` and keep test sessions isolated from your daily browser profile.
+
+Chrome for Testing also works well with Chromex. Download it manually from Google's official Chrome for Testing channel, then point Chromex at the executable with `--browser-path` or `CHROMEX_BROWSER_PATH`. Chromex does not download or bundle a browser.
+
+### Option B: Connect to an Already-Running Browser
+
+Use this when you want Chromex to inspect tabs that are already open in your normal browser.
+
+1. Open Chrome, Brave, Edge, Chromium, or Vivaldi.
+2. Go to `chrome://inspect/#remote-debugging`.
+3. Enable the remote debugging switch.
+4. Run `chromex list` to verify that tabs are visible.
+
+```bash
+chromex list
+```
+
+Important notes:
+
+- Without remote debugging enabled, Chromex cannot discover or control your open tabs.
+- The browser setting is usually persistent across restarts.
+- The first command that attaches to a tab may show an "Allow debugging" prompt. Accept it once for that tab; Chromex keeps the daemon session alive after that.
+
+If your browser uses a custom profile or a non-standard `DevToolsActivePort` location, set:
+
+```bash
+export CDP_PORT_FILE=/path/to/DevToolsActivePort
+```
+
+If your Chromium executable is installed in a non-standard location, either pass `--browser-path` to `chromex launch` or set:
+
+```bash
+export CHROMEX_BROWSER_PATH=/path/to/chrome
+```
+
+Run the local diagnostic command whenever browser discovery or CDP connection fails:
+
+```bash
+chromex doctor
+```
+
+## Install the CLI
+
+Install the package globally to get the `chromex` command.
+
+```bash
+# npm
+npm install -g chromex-mcp
+
+# Bun
+bun add -g chromex-mcp
+```
+
+The package installs three binaries:
+
+| Binary | Purpose |
+|--------|---------|
+| `chromex` | Main CLI for terminal, scripts, CI, and token-sensitive agent sessions. |
+| `chromex-cli` | Alias for `chromex`. |
+| `chromex-mcp` | MCP server over stdio JSON-RPC. Usually launched by an MCP client. |
+
+## CLI Quick Start
+
+The CLI is the recommended interface when token budget matters. It has no MCP schema overhead, works well in scripts, and returns compact plain-text output designed for LLM agents.
+
+```bash
+# 1. Launch or connect to a browser.
+chromex launch --url https://github.com/login
+
+# 2. List tabs and copy a target prefix.
+chromex list
+# 6BE827FA  Sign in to GitHub  https://github.com/login
+
+# 3. Read the page through the accessibility tree and assign refs.
+chromex snap 6BE8 --refs
+# @e1 [textbox] Username or email address
+# @e2 [textbox] Password
+# @e3 [button] Sign in
+
+# 4. Interact by ref instead of fragile CSS selectors.
+chromex fill 6BE8 @e1 "user@example.com"
+chromex fill 6BE8 @e2 "secret"
+chromex click 6BE8 @e3
+
+# 5. Inspect browser state.
+chromex console 6BE8 list
+chromex net 6BE8
+chromex shot 6BE8 /tmp/page.png
+chromex app 6BE8
+```
+
+`<target>` is a unique prefix of the tab target ID returned by `chromex list`. If a prefix is ambiguous, Chromex rejects it and asks for more characters.
+
+## Token-Efficient Agent Workflow
+
+Chromex is optimized for agents that need to act on browser state without wasting context.
+
+1. Start with `chromex list`.
+2. Prefer `chromex snap <target> --refs` over raw HTML.
+3. Use `@eN` refs for `click`, `fill`, `hover`, and element screenshots.
+4. On large pages, use `--query` before reading a full snapshot.
+5. Let auto-snapshot show post-action state after interactive commands.
+6. Add `--no-snap` only for fast scripted batches where you do not need immediate page state.
+7. Add `--no-hints` when another program parses output strictly.
+
+Examples:
+
+```bash
+chromex snap 6BE8 --query=login --refs
+chromex click 6BE8 @e4
+chromex wait 6BE8 networkidle
+chromex snap 6BE8 --query=error
+```
+
+## MCP Server
+
+Use MCP when you want Claude Code or another MCP client to discover typed browser tools directly. MCP is convenient, but it costs more tokens than CLI usage because tool schemas, JSON-RPC framing, and structured tool results add overhead.
+
+### Add to Claude Code
+
+Global, available in all projects:
+
+```bash
+# npm
+claude mcp add chromex -s user npx chromex-mcp@latest
+
+# Bun
+claude mcp add chromex -s user bunx chromex-mcp@latest
+```
+
+Project-only:
+
+```bash
+# npm
+claude mcp add chromex npx chromex-mcp@latest
+
+# Bun
+claude mcp add chromex bunx chromex-mcp@latest
+```
+
+After setup, the MCP client can call tools such as `chromex_list`, `chromex_snapshot`, `chromex_click`, `chromex_fill`, `chromex_screenshot`, `chromex_console`, `chromex_network`, `chromex_app_summary`, `chromex_cache_entries`, and `chromex_indexeddb_rows`.
+
+### Claude Code Auto-Approve
+
+To approve all Chromex MCP tools at once, add this to `~/.claude/settings.json`:
 
 ```json
 {
@@ -50,608 +230,313 @@ Add to `~/.claude/settings.json`:
 }
 ```
 
-This approves all 56 MCP tools at once. For granular control, approve individual tools:
+For CLI usage inside Claude Code, approve the shell command instead:
 
 ```json
 {
   "permissions": {
     "allow": [
-      "mcp__chromex__chromex_list",
-      "mcp__chromex__chromex_snapshot",
-      "mcp__chromex__chromex_screenshot",
-      "mcp__chromex__chromex_perf"
-    ]
-  }
-}
-```
-
-### Global install (optional)
-
-```bash
-npm install -g chromex-mcp
-```
-
-This installs three binaries:
-
-| Binary | Purpose |
-|--------|---------|
-| `chromex` | CLI -- the main command for terminal usage |
-| `chromex-cli` | Alias for `chromex` |
-| `chromex-mcp` | MCP server (stdio JSON-RPC) -- used by `claude mcp add`, not run directly |
-
-```bash
-chromex list                          # List open tabs
-chromex launch --url https://example.com  # Launch browser
-chromex snap 6BE8 --refs              # Snapshot with refs
-chromex click 6BE8 @e3               # Click by ref
-```
-
-## Connect to Your Browser
-
-**Option A: Launch a new browser** (recommended -- no setup needed)
-
-```bash
-chromex launch --url https://example.com
-```
-
-This starts Chrome/Brave/Edge with remote debugging pre-enabled. No manual configuration required.
-
-**Option B: Connect to an already-running browser**
-
-1. Open your browser (Chrome, Brave, Edge, etc.)
-2. Navigate to `chrome://inspect/#remote-debugging`
-3. **Toggle the switch ON** to enable remote debugging
-4. Run `chromex list` to verify the connection
-
-> **Important:** Without step 3, chromex cannot connect to your browser. This is a one-time setup -- the setting persists across browser restarts.
-
-> **Note:** With Option B, Chrome will show an "Allow debugging" dialog the first time you access each tab. Click "Allow" once per tab -- the daemon keeps the session alive after that.
-
-## Quick Start
-
-```bash
-# List open tabs
-chromex list
-# Output: 6BE827FA  Example Domain  https://example.com
-
-# Take a screenshot
-chromex shot 6BE8 /tmp/page.png
-
-# Get the accessibility tree with interactive refs
-chromex snap 6BE8 --refs
-# Output:
-#   @e1 [textbox] Email
-#   @e2 [textbox] Password
-#   @e3 [button] Sign in
-
-# Fill a form using refs (no CSS selectors needed!)
-chromex fill 6BE8 @e1 "user@example.com"
-chromex fill 6BE8 @e2 "secret123"
-chromex click 6BE8 @e3
-
-# Check Core Web Vitals
-chromex perf 6BE8
-```
-
-## Commands
-
-`<target>` is a unique prefix of the targetId shown by `list` (e.g. `6BE827FA`).
-
-### Pages & Browser
-
-```bash
-chromex list                                       # List open pages
-chromex open   "https://example.com"               # Open new tab
-chromex close  <target>                            # Close tab
-chromex focus  <target>                            # Activate/focus tab
-chromex launch                                     # Launch browser with debugging
-chromex launch --incognito --browser brave          # Launch Brave in incognito
-chromex launch --headless --url https://example.com # Headless mode for CI/CD
-chromex launch --proxy socks5://localhost:1080      # Launch with proxy
-chromex launch --insecure                           # Ignore certificate errors
-chromex launch --chrome-arg --disable-web-security  # Pass custom Chrome flag
-chromex launch --profile testing --url https://...  # Isolated profile + URL
-chromex incognito https://example.com               # Isolated context (no relaunch)
-chromex stop                                        # Stop all daemons
-```
-
-### Inspect
-
-```bash
-chromex snap    <target>                    # Accessibility tree snapshot (compact)
-chromex snap    <target> --refs             # With interactive refs (@e1, @e2...)
-chromex snap    <target> --depth=3          # Limit tree depth
-chromex snap    <target> --full             # Force full snapshot (skip diff)
-chromex snap    <target> --query=login      # Filter to matching nodes + ancestors (hierarchy preserved)
-chromex html    <target> "#main"            # Element HTML by selector
-chromex shot    <target> /tmp/page.png      # Viewport screenshot
-chromex shot    <target> /tmp/full.png --full  # Full page screenshot
-chromex shot    <target> --format=jpeg --quality=80  # JPEG/WebP with quality control
-chromex shot    <target> @e5               # Screenshot of specific element by ref
-chromex net     <target>                    # List network requests (CDP tracked)
-chromex net     <target> <requestId>        # Request detail: headers, timing, body
-chromex perf    <target>                    # Core Web Vitals + memory + DOM stats
-chromex console <target> 5000               # Capture console.log/error for 5s
-chromex console <target> list               # Show stored messages since daemon start
-chromex console <target> detail <id>        # Message detail with stack trace
-chromex domsnapshot <target>                # Structured DOM with bounding rects
-chromex domsnapshot <target> --styles       # Include computed styles
-chromex highlight <target> "h1"             # Highlight element with overlay
-chromex highlight <target> clear            # Remove highlight
-```
-
-### Evaluate
-
-```bash
-chromex eval    <target> "document.title"                          # Run JS
-chromex eval    <target> "document.querySelectorAll('a').length"    # Count links
-chromex evalraw <target> "DOM.getDocument"                         # Raw CDP command
-chromex evalraw <target> "Page.getLayoutMetrics"                   # Layout info
-```
-
-### Navigate & Wait
-
-```bash
-chromex nav     <target> "https://example.com"    # Navigate + wait for load
-chromex nav     <target> back                      # Go back in history
-chromex nav     <target> forward                   # Go forward in history
-chromex nav     <target> reload                    # Reload page
-chromex nav     <target> reload-hard               # Reload ignoring cache
-chromex waitfor <target> ".results" 10000          # Wait for CSS selector (10s)
-chromex wait    <target> networkidle               # Wait for network idle
-chromex wait    <target> load                      # Wait for page load
-chromex wait    <target> domready                  # Wait for DOMContentLoaded
-chromex wait    <target> fcp                       # Wait for First Contentful Paint
-chromex scroll  <target> down 500                  # Scroll down 500px
-chromex scroll  <target> up 300                    # Scroll up 300px
-chromex scroll  <target> top                       # Scroll to top
-chromex scroll  <target> bottom                    # Scroll to bottom
-chromex scroll  <target> to "#footer"              # Scroll to element
-```
-
-### Interact
-
-```bash
-chromex click   <target> "button.submit"           # Click by CSS selector
-chromex click   <target> @e5                       # Click by ref (from snap --refs)
-chromex click   <target> @e5 --dbl                 # Double-click
-chromex clickxy <target> 100 200                   # Click at CSS pixel coords
-chromex clickxy <target> 100 200 --dbl             # Double-click at coords
-chromex key     <target> Enter                     # Press key
-chromex key     <target> "Control+A"               # Key combination
-chromex key     <target> "Control+Shift+R"         # Multi-modifier combo
-chromex type    <target> "hello world"             # Type text (works cross-origin)
-chromex hover   <target> @e12                      # Hover element by ref
-chromex drag    <target> "#source" "#dest"         # Drag & drop by selector
-chromex drag    <target> 100,200 400,500           # Drag & drop by coordinates
-chromex touch   <target> tap 200 300               # Touch tap
-chromex touch   <target> swipe 200,400 200,100     # Swipe gesture
-chromex touch   <target> pinch 200 300 2.0         # Pinch zoom in
-chromex touch   <target> longpress 200 300 1000    # Long press (1s)
-chromex dialog  <target> accept                    # Accept alert/confirm
-chromex dialog  <target> dismiss                   # Dismiss dialog
-chromex dialog  <target> auto                      # Auto-accept all dialogs
-chromex loadall <target> ".load-more" 500          # Click until element disappears
-```
-
-### Forms
-
-```bash
-chromex fill    <target> "#email" "user@test.com"  # Fill input/textarea
-chromex fill    <target> @e1 "user@test.com"       # Fill by ref
-chromex clear   <target> "#search"                 # Clear field
-chromex select  <target> "#country" "BR"           # Select dropdown option
-chromex check   <target> "#terms"                  # Check checkbox
-chromex check   <target> "#newsletter" false        # Uncheck checkbox
-chromex upload  <target> "#avatar" /tmp/photo.png   # Upload file
-
-# Batch fill entire form
-chromex form    <target> '{"#name":"John","#email":"john@test.com","#terms":true}'
-```
-
-### Data
-
-```bash
-chromex cookies <target>                            # List cookies
-chromex cookies <target> set '{"name":"x","value":"y"}'  # Set cookie
-chromex cookies <target> clear                      # Clear all cookies
-chromex storage <target> local                      # Dump localStorage
-chromex storage <target> session                    # Dump sessionStorage
-chromex storage <target> clear                      # Clear both
-chromex pdf     <target> /tmp/page.pdf              # Export as PDF
-```
-
-### Network
-
-```bash
-chromex throttle <target> 3g                       # Throttle to 3G
-chromex throttle <target> slow-3g                  # Throttle to slow 3G
-chromex throttle <target> 4g                       # Throttle to 4G
-chromex throttle <target> offline                  # Go offline
-chromex throttle <target> custom 200 1000 500      # Custom: latency, down, up (kbps)
-chromex throttle <target> reset                    # Remove throttling
-
-chromex intercept <target> block "*.analytics.*"   # Block matching requests
-chromex intercept <target> mock "/api/user" '{"name":"test"}'  # Mock response
-chromex intercept <target> rules                   # List active rules
-chromex intercept <target> off                     # Disable interception
-
-chromex har <target> start                         # Start recording
-chromex har <target> stop /tmp/trace.har           # Save HAR file
-```
-
-### Emulate
-
-```bash
-chromex emulate  <target> iphone-14                # 390x844 @3x mobile
-chromex emulate  <target> iphone-15-pro            # 393x852 @3x mobile
-chromex emulate  <target> ipad-pro                 # 1024x1366 @2x tablet
-chromex emulate  <target> pixel-7                  # 412x915 @2.625x mobile
-chromex emulate  <target> galaxy-s23               # 360x780 @3x mobile
-chromex emulate  <target> macbook-air              # 1440x900 @2x laptop
-chromex emulate  <target> desktop-1080p            # 1920x1080 @1x
-chromex emulate  <target> desktop-4k               # 3840x2160 @1x
-chromex emulate  <target> reset                    # Reset to default
-chromex resize   <target> 1280 720                 # Custom viewport dimensions
-chromex resize   <target> 1440 900 2               # Custom with DPR (retina)
-chromex geo      <target> -23.55 -46.63            # Set geolocation (Sao Paulo)
-chromex geo      <target> reset                    # Clear geolocation
-chromex timezone <target> "America/Sao_Paulo"      # Set timezone
-chromex locale   <target> "pt-BR"                  # Set locale
-chromex cpu      <target> 4                        # CPU 4x slower
-chromex cpu      <target> reset                    # Reset CPU speed
-```
-
-### Advanced
-
-```bash
-chromex inject   <target> "window.DEBUG=true"      # Inject JS on every page load
-chromex inject   <target> --file /tmp/preload.js   # Inject from file
-chromex inject   <target> --list                   # List injected scripts
-chromex inject   <target> --remove <id>            # Remove injected script
-chromex download <target> allow /tmp/downloads     # Auto-accept downloads
-chromex download <target> deny                     # Block downloads
-chromex coverage <target> start                    # Start code coverage
-chromex coverage <target> stop                     # Coverage report (JS + CSS %)
-chromex trace    <target> start                    # Start performance trace
-chromex trace    <target> stop /tmp/trace.json     # Save trace (chrome://tracing)
-chromex heap     <target> snapshot /tmp/heap.hs    # Heap snapshot (memory analysis)
-chromex webauthn <target> enable                   # Virtual authenticator (passkeys)
-chromex webauthn <target> creds                    # List stored credentials
-chromex webauthn <target> disable                  # Remove authenticator
-```
-
-### Audit & Analytics
-
-```bash
-chromex audit   <target>                           # Full Lighthouse audit (all categories)
-chromex audit   <target> performance,seo           # Specific categories
-chromex audit   <target> accessibility desktop     # Accessibility on desktop
-chromex stats   <target>                           # Session analytics (command counts, timing)
-chromex stats   <target> --full                    # Full action timeline
-chromex stats   <target> --reset                   # Reset counters
-chromex stats   <target> --export=/tmp/stats.json  # Export as JSON
-```
-
-## Ref-Based Selection
-
-The killer feature for AI agents. Instead of fragile CSS selectors, use numbered refs:
-
-```bash
-# 1. Get interactive elements with refs
-chromex snap <target> --refs
-# Output:
-#   @e1 [textbox] Username
-#   @e2 [textbox] Password
-#   @e3 [checkbox] Remember me
-#   @e4 [button] Sign in
-#   @e5 [link] Forgot password?
-
-# 2. Interact using refs
-chromex fill  <target> @e1 "admin"
-chromex fill  <target> @e2 "secret123"
-chromex click <target> @e3
-chromex click <target> @e4
-```
-
-Refs are assigned to all interactive elements (buttons, links, inputs, checkboxes, radios, dropdowns, tabs, switches, sliders, search boxes). They persist until the next `snap --refs` call.
-
-Supported ref commands: `click @eN`, `fill @eN "value"`, `hover @eN`.
-
-## Snapshot Optimizations
-
-Chromex snapshots are designed to minimize token usage for AI agents.
-
-### Incremental Diff
-
-The first snapshot returns the full accessibility tree. Subsequent snapshots return only nodes that changed:
-
-```
-[incremental: 2 changed, 45 unchanged]
-  *[textbox] Email = "user@example.com"
-  *[button] Submit
-```
-
-- Changed/new nodes are marked with `*`
-- Unchanged subtrees are collapsed entirely
-- Use `--full` to force a full snapshot (skips diff)
-- Navigation (`nav`) resets the diff baseline automatically
-
-### Depth Limiting
-
-Limit tree depth for large pages:
-
-```bash
-chromex snap <target> --depth=3    # Only 3 levels deep
-```
-
-Nodes at the depth limit render as leaves (children are not expanded).
-
-### Query Filter
-
-On large pages, a full accessibility tree can be tens of kilobytes. Use `--query` to keep only the nodes you care about, with their ancestors preserved so the hierarchy stays intact:
-
-```bash
-chromex snap <target> --query=login     # Substring match (case-insensitive)
-chromex snap <target> --query=issues    # role/name/value all searched
-```
-
-Matched nodes are prefixed with `>` in the output, so the agent can spot them at a glance. Ancestor chains are included from the match up to the root, so the agent still understands the surrounding structure.
-
-`@eN` refs stay stable across filtered and unfiltered calls because the ref map is always computed against the full tree. A filtered `snap --query=login` followed by a plain `snap --refs` returns the same ref numbering. Fingerprints for incremental diff are also computed on the full tree, so the next non-query snapshot still produces a correct diff against the previous state.
-
-Measured reduction on a real 65 KB GitHub repo page snapshot:
-
-| Query | Output bytes | Reduction |
-|-------|-------------:|----------:|
-| `snap --full` (baseline) | 65,455 | -- |
-| `snap --query=issues` | 317 | **-99.5%** |
-| `snap --query=star` | 1,490 | **-97.7%** |
-| `snap --query=readme` | 936 | **-98.6%** |
-
-When no node matches, chromex returns the explicit empty state `snap: no matches for query "X"` so the agent never confuses an empty filter with a silent failure.
-
-### Scroll Detection
-
-Snapshots automatically detect scrollable containers and report remaining scroll distance:
-
-```
-[scroll: page: down:1200px | sidebar: up:300px, down:800px]
-```
-
-### Visibility Filtering
-
-- Ignored/hidden accessibility nodes are automatically omitted
-- Disabled interactive elements are shown but not assigned refs (can't be interacted with)
-- Generic wrapper nodes (`div`, `span` with no semantic role) are collapsed -- their children inherit the parent's depth
-- Names longer than 200 characters are truncated with `...`
-
-## Auto-Snapshot
-
-Interactive commands automatically append an incremental snapshot with refs after execution. This lets the AI agent see the updated page state without a separate `snap` call:
-
-```bash
-chromex click <target> @e3
-# Output:
-#   Clicked @e3 [button] "Submit"
-#
-#   [incremental: 5 changed, 40 unchanged]
-#   @e1 [heading] Thank you!
-#   @e2 [link] Back to home
-#   ...
-```
-
-Commands that trigger auto-snapshot: `click`, `clickxy`, `type`, `key`, `fill`, `clear`, `select`, `check`, `form`, `nav`, `dialog`, `loadall`, `drag`, `touch`, `upload`.
-
-Suppress with `--no-snap` for scripts doing rapid sequential actions:
-
-```bash
-chromex fill <target> @e1 "user@test.com" --no-snap
-chromex fill <target> @e2 "secret123" --no-snap
-chromex click <target> @e3    # Only this one triggers snapshot
-```
-
-## Contextual Hints
-
-After any action that produces a fresh ref map (auto-snap on interactive commands, or an explicit `snap --refs`), chromex appends a `help[N]:` block with up to 3 next-step suggestions picked heuristically from the current elements and the last command:
-
-```
-Navigated to https://github.com/login
-
-RootWebArea "Sign in to GitHub"
-  @e1 [textbox] Username or email address
-  @e2 [textbox] Password
-  @e3 [button] Sign in
-  @e4 [link] Forgot password?
-
-help[3]:
-  chromex fill <t> @e1 "<value>"  # textbox "Username or email address"
-  chromex click <t> @e3           # button "Sign in"
-  chromex click <t> @e4           # link "Forgot password?"
-```
-
-The agent gets the most probable next commands inline, eliminating the "decide what to click" turn. Heuristic rules:
-
-- **After `fill`** -- priority is a matching submit button (label matches `login`, `submit`, `send`, `search`, `go`, `continue`, ...) or `key Enter` fallback, then the next unfilled input.
-- **After `nav`** -- first input (highest priority), then first submit button, then first link.
-- **After `snap --refs`** (or any default) -- top interactive elements with non-empty names.
-- **Maximum 3 hints per response.**
-
-### Staleness Guard
-
-Hints are only emitted when chromex can guarantee the ref map matches the DOM that was just rendered. This prevents the agent from clicking `@eN` coordinates that no longer exist on screen:
-
-| Command | Hints? | Why |
-|---------|--------|-----|
-| `click`, `fill`, `nav`, `type`, ... (default) | Yes | auto-snap just ran with refs |
-| `click @e1 --no-snap`, `fill ... --no-snap` | **No** | ref map may be stale |
-| `snap --refs` | Yes | ref map populated by this call |
-| `snap --refs` on a page with zero interactive elements | **No** | nothing to suggest, avoids a `snap --refs` loop |
-| Bare `snap` (no `--refs`) | **No** | ref map was not refreshed |
-
-Navigation (URL, back, forward, reload) always clears the ref map before dispatching, so post-nav hints always reflect the new page.
-
-Opt out explicitly with `--no-hints` (CLI) or `noHints: true` (MCP) for scripts that parse output strictly.
-
-## Token Efficiency
-
-Chromex outputs are designed to be read by LLM agents, not humans. Every format decision -- plain text, refs over CSS selectors, incremental diffs, query filters -- was made to minimize tokens while preserving the information the agent actually needs to act.
-
-### Measured against common alternatives
-
-We measured the current plain-text output against three structured format candidates often proposed for agent interfaces: minified JSON, pretty-printed JSON, and a TOON-style compact encoder (a zero-dependency 60-line implementation of the YAML-inline compact style). Five representative chromex outputs were encoded in each format and tokenized with `tiktoken` (`cl100k_base`). Lower token counts are better.
-
-#### Case by case
-
-| Case                           | text-free  | json-min       | json-pretty     | toon-compact    |
-|--------------------------------|-----------:|---------------:|----------------:|----------------:|
-| `snap-login-small`             |    **130** |    178 (+37%)  |     301 (+132%) |      212 (+63%) |
-| `snap-repo-large` (65 KB real) | **19,702** | 34,315 (+74%)  |  63,232 (+221%) |  44,613 (+126%) |
-| `net-list-50`                  |    **454** |    574 (+26%)  |     921 (+103%) |      706 (+56%) |
-| `console-list-12`              |    **273** |    363 (+33%)  |     576 (+111%) |      453 (+66%) |
-| `fill-action-small`            |     **99** |    127 (+28%)  |     221 (+123%) |      146 (+48%) |
-
-The five cases cover the most common outputs an agent sees during a real session: a small accessibility snapshot with refs (a login form), a large accessibility snapshot of a real GitHub repository page, a network list with 50 tracked requests, a console list with a mix of `log`, `warn` and `error` entries, and a post-action result (fill + incremental diff + hints).
-
-#### Aggregate (5 cases combined)
-
-| Format                 |    tokens | vs text-free |
-|------------------------|----------:|-------------:|
-| **text-free (current)**| **20,658**|        --    |
-| json-min               |    35,557 |       +72.1% |
-| json-pretty            |    65,251 |      +215.9% |
-| toon-compact (custom)  |    46,130 |      +123.3% |
-
-The current plain-text output is the most token-efficient in every single case. Every structured alternative costs more tokens, not less, because JSON and YAML-style encodings add syntactic overhead (`{`, `}`, `"`, `:`, `,`, indentation) that the chromex plain-text format omits entirely. The chromex format is already dense: short refs (`@e5`), unquoted labels, no wrapping, no redundancy. Structured formats have nothing to optimize away.
-
-### Why this matters
-
-- **No structured-output refactor is planned.** Chromex keeps the current plain-text format because the data shows it wins.
-- **`@eN` refs beat CSS selectors** not just for reliability (accessibility tree is stable across SPA re-renders) but also for token count -- `@e5` is one token, `document.querySelector('#login-form > div.field input[name="email"]')` is around fifteen.
-- **`--query` and incremental diff** are where the real token savings live. A filtered snapshot on a large page drops output by 95% to 99%, and an incremental diff after an action drops it by 90% or more. These are multiplicative with the already-dense base format.
-
-### Reproducing the benchmark
-
-The comparison script is checked into the repo and runs standalone:
-
-```bash
-node tests/benchmarks/token-format-comparison.mjs
-```
-
-It uses `js-tiktoken` (devDependency) with `cl100k_base`, the GPT-4 tokenizer. Claude uses its own BPE tokenizer with a different vocabulary, so absolute numbers would shift by a few percent -- but both are byte-pair encoders over similar corpora, and the direction of the comparison (which format wins) is consistent across BPE tokenizers. Nothing in the results is a rounding error: the gaps are 25% to 220%.
-
-## MCP vs CLI
-
-Both interfaces call the same core, same daemons, same commands. The difference is how they integrate with Claude Code.
-
-| | CLI (`chromex-cli`) | MCP Server (`chromex-mcp`) |
-|---|---|---|
-| Token overhead | Zero schema cost | ~500 tokens per tool used (deferred loading) |
-| Auto-approve | Glob pattern in settings | `"mcp__chromex"` -- one line |
-| Permissions | All-or-nothing | Per-tool granularity |
-| Parameters | Positional string args | Typed JSON Schema |
-| Screenshots | File path (needs `Read` to view) | Inline image (base64, no extra call) |
-| Best for | Terminal, scripts, CI/CD, token-sensitive sessions | Plug-and-play automation, users who want zero-config |
-
-### Switching Between MCP and CLI
-
-You can enable and disable the MCP server at any time. The CLI always works regardless.
-
-**Disable MCP** (saves ~3-5k tokens per session):
-
-```bash
-claude mcp remove chromex
-```
-
-The CLI (`chromex-cli`) continues working normally -- same commands, same daemons, no change.
-
-**Re-enable MCP:**
-
-```bash
-# Global (all projects)
-claude mcp add chromex -s user npx chromex-mcp@latest
-
-# Project-only
-claude mcp add chromex npx chromex-mcp@latest
-```
-
-**When to disable MCP:**
-- Token-sensitive sessions where every token counts
-- You only need occasional commands (`list`, `snap`, `shot`)
-- You're already comfortable with the CLI syntax
-- You're using chromex from terminal/scripts, not from Claude Code
-
-**When to keep MCP enabled:**
-- Automating multi-step browser workflows (snap -> click -> fill -> snap)
-- You want per-tool auto-approve without glob patterns
-- You want inline screenshots without a separate `Read` call
-- First time using chromex (discovery via tool schema)
-
-### CLI Auto-Approve
-
-If you prefer the CLI interface, add this to `~/.claude/settings.json`:
-
-```json
-{
-  "permissions": {
-    "allow": [
+      "Bash(chromex *)",
       "Bash(chromex-cli *)"
     ]
   }
 }
 ```
 
+Review these permissions before enabling them. Chromex security settings still apply, and every command is audit-logged when `auditLog` is enabled.
+
+## CLI vs MCP
+
+Both interfaces use the same CDP core and the same per-tab daemons. Choose based on the workflow.
+
+| Use case | Prefer CLI | Prefer MCP |
+|----------|------------|------------|
+| Token-sensitive agent sessions | Yes | No |
+| Terminal scripts and CI | Yes | No |
+| Quick one-off browser inspection | Yes | Optional |
+| Typed tool discovery in Claude Code | No | Yes |
+| Inline screenshots returned to the client | No, screenshots are files | Yes |
+| Granular per-tool permissions | Shell pattern only | Yes |
+| Lowest setup friction for MCP users | Optional | Yes |
+
+You can remove MCP at any time and keep using the CLI:
+
+```bash
+claude mcp remove chromex
+```
+
+## Command Overview
+
+### Pages and Browser
+
+```bash
+chromex list
+chromex open "https://example.com"
+chromex close <target>
+chromex focus <target>
+chromex launch --url https://example.com
+chromex launch --browser brave --incognito
+chromex launch --headless --url https://example.com
+chromex launch --browser-path /path/to/chrome --url https://example.com
+chromex doctor
+chromex incognito https://example.com
+chromex stop
+```
+
+### Inspect
+
+```bash
+chromex snap <target> --refs
+chromex snap <target> --query=login
+chromex html <target> "#main"
+chromex shot <target> /tmp/page.png
+chromex shot <target> /tmp/full.png --full
+chromex shot <target> @e5
+chromex console <target> list
+chromex net <target>
+chromex perf <target>
+chromex domsnapshot <target> --styles
+```
+
+### Navigate and Wait
+
+```bash
+chromex nav <target> "https://example.com"
+chromex nav <target> back
+chromex nav <target> reload-hard
+chromex waitfor <target> ".results" 10000
+chromex wait <target> networkidle
+chromex scroll <target> bottom
+```
+
+### Interact
+
+```bash
+chromex click <target> @e5
+chromex clickxy <target> 100 200
+chromex key <target> Enter
+chromex type <target> "hello world"
+chromex hover <target> @e12
+chromex drag <target> "#source" "#dest"
+chromex dialog <target> accept
+```
+
+### Forms
+
+```bash
+chromex fill <target> @e1 "user@example.com"
+chromex clear <target> "#search"
+chromex select <target> "#country" "BR"
+chromex check <target> "#terms" true
+chromex upload <target> "#avatar" /tmp/photo.png
+chromex form <target> '{"#name":"John","#email":"john@example.com","#terms":true}'
+```
+
+### Data
+
+```bash
+chromex cookies <target>
+chromex cookies <target> set '{"name":"token","value":"abc"}'
+chromex storage <target> local
+chromex storage <target> session
+chromex storage <target> usage
+chromex app <target> summary
+chromex sw <target>
+chromex cache <target> list
+chromex cache <target> entries <cacheId> --query=/api
+chromex idb <target> list
+chromex idb <target> schema <databaseName>
+chromex idb <target> rows <databaseName> <objectStoreName> --limit=20
+chromex pdf <target> /tmp/page.pdf
+```
+
+### Network, Emulation, and Diagnostics
+
+```bash
+chromex throttle <target> 3g
+chromex intercept <target> block "*.analytics.*"
+chromex har <target> start
+chromex har <target> stop /tmp/trace.har
+chromex emulate <target> iphone-15-pro
+chromex resize <target> 1280 720
+chromex geo <target> -23.55 -46.63
+chromex timezone <target> "America/Sao_Paulo"
+chromex cpu <target> 4
+chromex audit <target> performance,accessibility desktop
+chromex stats <target> --full
+```
+
+### Advanced
+
+```bash
+chromex eval <target> "document.title"
+chromex evalraw <target> "Page.getLayoutMetrics"
+chromex inject <target> "window.DEBUG=true"
+chromex download <target> allow /tmp/downloads
+chromex coverage <target> start
+chromex trace <target> start
+chromex heap <target> snapshot /tmp/heap.heapsnapshot
+chromex webauthn <target> enable
+```
+
+Run `chromex --help` for the full command reference.
+
+## Agent-Focused Features
+
+### Ref-Based Selection
+
+`chromex snap --refs` assigns stable refs to interactive elements:
+
+```bash
+chromex snap <target> --refs
+# @e1 [textbox] Email
+# @e2 [textbox] Password
+# @e3 [button] Sign in
+
+chromex fill <target> @e1 "user@example.com"
+chromex click <target> @e3
+```
+
+Refs are shorter and more robust than CSS selectors for most agent workflows.
+
+### Incremental Snapshots
+
+The first snapshot returns the page tree. Later snapshots return only changed nodes unless you pass `--full`.
+
+```bash
+chromex snap <target> --refs
+chromex click <target> @e3
+# The click response includes a fresh incremental snapshot with refs.
+```
+
+### Query-Filtered Snapshots
+
+Use `--query` to keep output small on large pages:
+
+```bash
+chromex snap <target> --query=issues --refs
+chromex snap <target> --query="sign in" --refs
+```
+
+Chromex preserves ancestor nodes so the filtered output still has usable context.
+
+### Contextual Hints
+
+After actions that refresh refs, Chromex can append a `help[N]:` block with likely next commands:
+
+```text
+help[3]:
+  chromex fill <t> @e1 "<value>"  # textbox "Email"
+  chromex click <t> @e3           # button "Sign in"
+  chromex click <t> @e4           # link "Forgot password?"
+```
+
+Disable hints with `--no-hints`.
+
+## Application State Suite
+
+Chromex exposes browser Application panel state without Puppeteer, Playwright, or extra packages. This is useful for debugging PWAs, offline behavior, stale caches, local database migrations, authentication state, and quota issues from the same logged-in browser session an agent is already using.
+
+```bash
+# One-line overview for the current origin
+chromex app <target> summary
+
+# Origin quota and per-storage-type usage
+chromex storage <target> usage
+
+# Service Worker registrations and versions
+chromex sw <target>
+chromex sw <target> update https://example.com/
+chromex sw <target> skip-waiting https://example.com/
+
+# Cache Storage
+chromex cache <target> list
+chromex cache <target> entries <cacheId> --query=/api
+chromex cache <target> body <cacheId> https://example.com/app.js
+
+# IndexedDB
+chromex idb <target> list
+chromex idb <target> schema app-db
+chromex idb <target> rows app-db users --limit=20
+```
+
+`chromex app <target> summary` includes origin, quota, localStorage key count, sessionStorage key count, cookie count, Cache Storage cache/entry counts, IndexedDB database count, active/waiting Service Worker counts, storage bucket count, and manifest status.
+
+Destructive Application commands are explicit: `storage clear-site-data`, `sw unregister`, `cache delete-entry`, `cache delete`, and `idb clear`.
+
 ## Security
 
-Config at `~/.chromex/config.json` (auto-created on first run):
+Chromex creates `~/.chromex/config.json` on first run:
 
 ```json
 {
-  "blockedDomains": ["mail.google.com", "bank.example.com"],
+  "commandTimeout": 15000,
+  "navigationTimeout": 30000,
+  "idleTimeout": 1200000,
   "allowedDomains": [],
-  "blockedCdpMethods": ["Browser.close", "Storage.getCookies", "..."],
-  "socketAuth": true,
-  "auditLog": true
+  "blockedDomains": [],
+  "blockedCdpMethods": ["Browser.close", "Storage.getCookies"],
+  "auditLog": true,
+  "socketAuth": true
 }
 ```
 
-- **Domain filtering**: block sensitive sites or restrict to a whitelist
-- **CDP blocklist**: dangerous methods blocked by default in `evalraw`
-- **Socket auth**: 32-byte random token per session (mode 0600)
-- **Audit log**: every command logged with timestamp and status
+Recommended security practices:
 
-See [docs/security.md](docs/security.md) for full details.
+- Add sensitive sites to `blockedDomains`, such as email, banking, password managers, and admin panels.
+- Use `allowedDomains` in restricted environments where the agent should access only specific hosts.
+- Keep `socketAuth` enabled.
+- Keep `auditLog` enabled and review `~/.chromex/audit.log` when needed.
+- Prefer `chromex launch --profile testing` for isolated browser state.
+
+See [docs/security.md](docs/security.md) for the full security model.
 
 ## How It Works
 
-1. **Browser detection** -- scans ~30 paths for `DevToolsActivePort` (or use `CDP_PORT_FILE` env var)
-2. **Daemon spawn** -- first command to a tab spawns a background Node.js process connected via CDP WebSocket
-3. **Session persistence** -- daemon holds the session open; Chrome's "Allow" modal fires once per daemon
-4. **Unix sockets** -- CLI/MCP communicates with daemon via authenticated Unix sockets
-5. **Auto-exit** -- daemons shut down after 20 minutes of inactivity (configurable)
-
-```
-CLI Client ──Unix Socket + Auth──> Per-Tab Daemon ──CDP WebSocket──> Chrome
-MCP Server ──Unix Socket + Auth──>     (same)     ──CDP WebSocket──> Chrome
+```text
+CLI or MCP client -> authenticated Unix socket -> per-tab daemon -> CDP WebSocket -> browser
 ```
 
-See [docs/architecture.md](docs/architecture.md) for the full deep dive.
+1. Chromex finds the browser DevTools endpoint from `DevToolsActivePort` or `CDP_PORT_FILE`.
+2. The first tab command starts a detached daemon for that tab.
+3. The daemon attaches once through CDP and keeps the session open.
+4. CLI and MCP commands talk to the daemon through an authenticated Unix socket.
+5. Daemons exit after the configured idle timeout.
+
+See [docs/architecture.md](docs/architecture.md) for implementation details.
 
 ## Documentation
 
 | Guide | Description |
 |-------|-------------|
-| [Getting Started](docs/getting-started.md) | Installation, connection methods, first commands |
-| [Inspect & Debug](docs/inspect.md) | Screenshots, accessibility tree, refs, HTML, eval, network, performance, console |
-| [Navigate & Interact](docs/navigate.md) | Navigation, clicking, typing, scrolling, drag & drop, touch, dialogs |
-| [Form Filling](docs/forms.md) | Fill, clear, select, check, upload, batch fill with examples |
-| [Data Access](docs/data.md) | Cookies, localStorage, sessionStorage, PDF export |
-| [Network Control](docs/network.md) | Throttling, interception, mocking, HAR recording |
-| [Device Emulation](docs/emulation.md) | Responsive testing, geolocation, timezone, CPU throttling |
-| [Security](docs/security.md) | Domain filtering, CDP blocklist, audit log, best practices |
-| [Advanced](docs/advanced.md) | Script injection, code coverage, tracing, heap snapshots, WebAuthn |
-| [Architecture](docs/architecture.md) | How it works: daemon model, connection modes, file layout |
+| [Getting Started](docs/getting-started.md) | Installation, browser setup, first commands. |
+| [Inspect and Debug](docs/inspect.md) | Screenshots, accessibility tree, refs, HTML, eval, network, performance, console. |
+| [Navigate and Interact](docs/navigate.md) | Navigation, clicking, typing, scrolling, drag and drop, touch, dialogs. |
+| [Form Filling](docs/forms.md) | Fill, clear, select, check, upload, batch form examples. |
+| [Data Access](docs/data.md) | Cookies, localStorage, sessionStorage, Application state, Cache Storage, IndexedDB, Service Workers, PDF export. |
+| [Network Control](docs/network.md) | Throttling, interception, mocking, HAR recording. |
+| [Device Emulation](docs/emulation.md) | Responsive testing, geolocation, timezone, CPU throttling. |
+| [Security](docs/security.md) | Domain filtering, CDP blocklist, audit log, best practices. |
+| [Advanced](docs/advanced.md) | Script injection, code coverage, tracing, heap snapshots, WebAuthn. |
+| [Architecture](docs/architecture.md) | Daemon model, connection modes, and file layout. |
+
+## Development
+
+```bash
+git clone https://github.com/whallysson/chromex.git
+cd chromex
+bun install
+bun run test
+```
+
+The runtime package has no dependencies. Development dependencies are used only for tests and token benchmarks.
+
+To reproduce the token-format comparison:
+
+```bash
+bun tests/benchmarks/token-format-comparison.mjs
+```
 
 ## License
 
-MIT
+MIT. See [LICENSE](LICENSE).

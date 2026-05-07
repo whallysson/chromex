@@ -67,10 +67,10 @@ describe('MCP Protocol', () => {
     expect(r.result.protocolVersion).toBe('2025-03-26');
     expect(r.result.capabilities).toEqual({ tools: {} });
     expect(r.result.serverInfo.name).toBe('chromex');
-    expect(r.result.serverInfo.version).toBe('1.5.0');
+    expect(r.result.serverInfo.version).toBe('1.6.0');
   });
 
-  it('tools/list returns 56 tools', async () => {
+  it('tools/list returns 73 tools', async () => {
     const responses = await mcpSession([
       INIT,
       INITIALIZED,
@@ -78,7 +78,7 @@ describe('MCP Protocol', () => {
     ]);
     const r = findById(responses, 1);
     expect(r).toBeDefined();
-    expect(r.result.tools).toHaveLength(56);
+    expect(r.result.tools).toHaveLength(73);
   });
 
   it('noHints is declared on all tools that accept noSnap (P2 regression guard)', async () => {
@@ -213,9 +213,12 @@ describe('Tool Definitions', () => {
     ]);
     tools = findById(responses, 1).result.tools;
 
-    const readOnlyTools = ['chromex_list', 'chromex_snapshot', 'chromex_html',
+    const readOnlyTools = ['chromex_list', 'chromex_doctor', 'chromex_snapshot', 'chromex_html',
       'chromex_screenshot', 'chromex_network', 'chromex_perf', 'chromex_console',
-      'chromex_domsnapshot', 'chromex_waitfor', 'chromex_wait', 'chromex_heap'];
+      'chromex_domsnapshot', 'chromex_waitfor', 'chromex_wait', 'chromex_heap',
+      'chromex_storage_usage', 'chromex_app_summary', 'chromex_service_workers',
+      'chromex_cache_list', 'chromex_cache_entries', 'chromex_cache_body',
+      'chromex_indexeddb_list', 'chromex_indexeddb_schema', 'chromex_indexeddb_rows'];
 
     for (const name of readOnlyTools) {
       const t = tools.find(x => x.name === name);
@@ -232,7 +235,9 @@ describe('Tool Definitions', () => {
     ]);
     tools = findById(responses, 1).result.tools;
 
-    const destructiveTools = ['chromex_close', 'chromex_stop'];
+    const destructiveTools = ['chromex_close', 'chromex_stop',
+      'chromex_storage_clear_site_data', 'chromex_service_worker_unregister',
+      'chromex_cache_delete_entry', 'chromex_cache_delete', 'chromex_indexeddb_clear_store'];
 
     for (const name of destructiveTools) {
       const t = tools.find(x => x.name === name);
@@ -249,7 +254,7 @@ describe('Tool Definitions', () => {
     ]);
     tools = findById(responses, 1).result.tools;
 
-    const noTarget = ['chromex_list', 'chromex_launch', 'chromex_incognito', 'chromex_stop'];
+    const noTarget = ['chromex_list', 'chromex_launch', 'chromex_doctor', 'chromex_incognito', 'chromex_stop'];
 
     for (const t of tools) {
       if (noTarget.includes(t.name)) {
@@ -395,7 +400,7 @@ describe('Auto-Snapshot Tools', () => {
 
 describe('Tool Names', () => {
   const EXPECTED_TOOLS = [
-    'chromex_list', 'chromex_launch', 'chromex_open', 'chromex_close',
+    'chromex_list', 'chromex_launch', 'chromex_doctor', 'chromex_open', 'chromex_close',
     'chromex_focus', 'chromex_incognito', 'chromex_stop',
     'chromex_snapshot', 'chromex_html', 'chromex_screenshot',
     'chromex_network', 'chromex_perf', 'chromex_console',
@@ -407,6 +412,14 @@ describe('Tool Names', () => {
     'chromex_fill', 'chromex_clear', 'chromex_select', 'chromex_check',
     'chromex_form', 'chromex_upload',
     'chromex_cookies', 'chromex_storage', 'chromex_pdf',
+    'chromex_storage_usage', 'chromex_storage_clear_site_data',
+    'chromex_app_summary', 'chromex_service_workers',
+    'chromex_service_worker_update', 'chromex_service_worker_skip_waiting',
+    'chromex_service_worker_unregister',
+    'chromex_cache_list', 'chromex_cache_entries', 'chromex_cache_body',
+    'chromex_cache_delete_entry', 'chromex_cache_delete',
+    'chromex_indexeddb_list', 'chromex_indexeddb_schema',
+    'chromex_indexeddb_rows', 'chromex_indexeddb_clear_store',
     'chromex_throttle', 'chromex_intercept', 'chromex_har',
     'chromex_emulate', 'chromex_geo', 'chromex_timezone',
     'chromex_locale', 'chromex_cpu', 'chromex_resize',

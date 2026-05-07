@@ -1,4 +1,4 @@
-// Per-tab daemon: mantém sessão CDP aberta, recebe comandos via Unix socket
+// Per-tab daemon: keeps the CDP session open and receives commands through a Unix socket
 import { readFileSync, writeFileSync, unlinkSync, existsSync } from 'fs';
 import { randomBytes } from 'crypto';
 import net from 'net';
@@ -7,7 +7,7 @@ import { getWsUrl, getPages, formatPageList } from './browser.mjs';
 import { audit } from './security.mjs';
 import { sockPath } from './utils.mjs';
 
-// Importar todos os comandos
+// Import all commands
 import { snapshotStr } from './commands/snapshot.mjs';
 import { evalStr, evalRawStr } from './commands/evaluate.mjs';
 import { shotStr } from './commands/screenshot.mjs';
@@ -49,6 +49,7 @@ import { parseRef, clickRefStr, hoverRefStr, fillRefStr } from './commands/refs.
 import { highlightStr } from './commands/highlight.mjs';
 import { auditStr } from './commands/audit.mjs';
 import { SessionStats, statsStr } from './commands/stats.mjs';
+import { appStr, cacheStr, idbStr, serviceWorkersStr } from './commands/app.mjs';
 import { generateHints, renderHints, isRefMapFresh } from './hints.mjs';
 import { sleep } from './utils.mjs';
 
@@ -98,7 +99,7 @@ export async function runDaemon(targetId, config) {
     if (!alive) return;
     alive = false;
     server.close();
-    try { unlinkSync(sp); } catch { /* socket já removido */ }
+    try { unlinkSync(sp); } catch { /* socket already removed */ }
     cdp.close();
     process.exit(0);
   }
@@ -208,7 +209,7 @@ export async function runDaemon(targetId, config) {
       }
 
       if (!isRefCmd) switch (cmd) {
-        // --- Comandos originais ---
+        // --- Original commands ---
         case 'list': {
           const pages = await getPages(cdp);
           result = formatPageList(pages, config);
@@ -311,7 +312,7 @@ export async function runDaemon(targetId, config) {
         case 'waitfor':
           result = await waitForStr(cdp, sessionId, args[0], args[1] ? parseInt(args[1]) : undefined, config);
           break;
-        // --- Novos comandos ---
+        // --- Additional commands ---
         case 'fill':
           result = await fillStr(cdp, sessionId, args[0], args.slice(1).join(' '));
           break;
@@ -349,6 +350,18 @@ export async function runDaemon(targetId, config) {
         }
         case 'storage':
           result = await storageStr(cdp, sessionId, args[0]);
+          break;
+        case 'app':
+          result = await appStr(cdp, sessionId, args[0]);
+          break;
+        case 'sw':
+          result = await serviceWorkersStr(cdp, sessionId, args[0], args[1]);
+          break;
+        case 'cache':
+          result = await cacheStr(cdp, sessionId, args[0], ...args.slice(1));
+          break;
+        case 'idb':
+          result = await idbStr(cdp, sessionId, args[0], ...args.slice(1));
           break;
         case 'emulate':
           result = await emulateStr(cdp, sessionId, args[0]);
@@ -523,7 +536,7 @@ export async function runDaemon(targetId, config) {
     }
   }
 
-  // Unix socket server com autenticação
+  // Unix socket server with authentication
   const server = net.createServer((conn) => {
     let buf = '';
     let authenticated = !config.socketAuth;
@@ -562,6 +575,6 @@ export async function runDaemon(targetId, config) {
     });
   });
 
-  try { unlinkSync(sp); } catch { /* socket não existe */ }
+  try { unlinkSync(sp); } catch { /* socket does not exist */ }
   server.listen(sp);
 }

@@ -102,6 +102,10 @@ The `evalraw` command can send arbitrary CDP commands. Dangerous methods are blo
 | `Storage.getCookies` | Accesses cookies via CDP (use `cookies` command instead, which respects domain filtering) |
 | `IndexedDB.requestData` | Reads IndexedDB data |
 
+This blocklist applies to arbitrary `evalraw` calls. Purpose-built high-level commands such as `cookies`, `storage usage`, `cache`, and `idb rows` still use the required CDP methods internally, but they run through Chromex's target resolution, domain filtering, explicit command names, and audit log.
+
+Destructive Application state commands are intentionally explicit: `storage clear-site-data`, `sw unregister`, `cache delete-entry`, `cache delete`, and `idb clear`.
+
 To customize, edit `blockedCdpMethods` in the config:
 
 ```json

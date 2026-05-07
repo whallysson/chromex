@@ -14,7 +14,7 @@ import { launchBrowser, incognitoContext } from './lib/launcher.mjs';
 
 const config = loadConfig();
 
-// Comandos que precisam de target (tab)
+// Commands that require a target tab
 const NEEDS_TARGET = new Set([
   'snap', 'snapshot', 'eval', 'shot', 'screenshot', 'html', 'nav', 'navigate',
   'net', 'network', 'click', 'clickxy', 'type', 'loadall', 'evalraw', 'waitfor',
@@ -28,6 +28,8 @@ const NEEDS_TARGET = new Set([
   // Tier 3
   'trace', 'heap', 'webauthn', 'drag', 'touch', 'domsnapshot', 'highlight',
   'hover', 'key', 'resize', 'audit', 'stats',
+  // Application state
+  'app', 'sw', 'cache', 'idb',
 ]);
 
 const USAGE = `chromex - Chrome DevTools Protocol CLI for AI agents
@@ -44,6 +46,7 @@ Usage: chromex <command> [args]
       --browser chrome|brave|edge       Choose browser
       --profile NAME                    Use named profile
       --url URL                         Open URL on launch
+      --browser-path PATH               Use an explicit Chromium executable
       --headless                        Launch in headless mode (no UI)
       --proxy PROXY                     Proxy server (e.g. socks5://localhost:1080)
       --insecure                        Ignore certificate errors
@@ -100,7 +103,11 @@ Usage: chromex <command> [args]
 
   DATA
     cookies <target> [action] [arg]     Cookies: list, set <json>, clear [domain]
-    storage <target> <type>             Storage: local, session, clear
+    storage <target> <type>             Storage: local, session, clear, usage, clear-site-data
+    app     <target> [summary]          Application state summary
+    sw      <target> [action] [scope]   Service Workers: list, update, skip-waiting, unregister
+    cache   <target> [action] [args]    Cache Storage: list, entries <cacheId> --query=/api, body, delete-entry, delete
+    idb     <target> [action] [args]    IndexedDB: list, schema, rows --limit=20, clear
     pdf     <target> [file]             Save page as PDF
 
   NETWORK
@@ -132,6 +139,7 @@ Usage: chromex <command> [args]
       --export=/path/to/stats.json      Export as JSON
 
   DAEMON
+    doctor                              Diagnose browser/CDP connectivity
     stop    [target]                    Stop daemon(s)
 
 <target> is a unique targetId prefix from "chromex list". Ambiguous prefixes are rejected.
@@ -165,7 +173,7 @@ async function main() {
     process.exit(0);
   }
 
-  // --- Comandos sem target ---
+  // --- Commands without target ---
 
   // List
   if (cmd === 'list' || cmd === 'ls') {
@@ -176,7 +184,7 @@ async function main() {
         const conn = await connectAndAuthFromSocket(existingSock);
         const resp = await sendCommand(conn, { cmd: 'list_raw' });
         if (resp.ok) pages = JSON.parse(resp.result);
-      } catch { /* fallback para conexão direta */ }
+      } catch { /* fallback to direct connection */ }
     }
     if (!pages) {
       const cdp = new CDP(config.commandTimeout);
@@ -193,14 +201,22 @@ async function main() {
 
   // Launch
   if (cmd === 'launch') {
-    const options = parseFlags(args, ['incognito', 'headless', 'insecure'], ['browser', 'profile', 'url', 'proxy', 'chrome-arg']);
+    const options = parseFlags(args, ['incognito', 'headless', 'insecure'], ['browser', 'browser-path', 'profile', 'url', 'proxy', 'chrome-arg']);
     if (options['chrome-arg']) { options.chromeArgs = [options['chrome-arg']]; delete options['chrome-arg']; }
+    if (options['browser-path']) { options.browserPath = options['browser-path']; delete options['browser-path']; }
     const result = await launchBrowser(options);
     console.log(result);
     return;
   }
 
-  // Incognito (sem target -- cria novo context)
+  // Doctor
+  if (cmd === 'doctor') {
+    const { doctorStr } = await import('./lib/commands/doctor.mjs');
+    console.log(await doctorStr(config));
+    return;
+  }
+
+  // Incognito (no target -- creates a new context)
   if (cmd === 'incognito') {
     const cdp = new CDP(config.commandTimeout);
     await cdp.connect(getWsUrl());
@@ -238,7 +254,7 @@ async function main() {
     return;
   }
 
-  // --- Comandos com target ---
+  // --- Commands with target ---
   if (!NEEDS_TARGET.has(cmd)) {
     console.error(`Unknown command: ${cmd}\n`);
     console.log(USAGE);
@@ -251,7 +267,7 @@ async function main() {
     process.exit(1);
   }
 
-  // Resolver prefix -> targetId
+  // Resolve prefix -> targetId
   let targetId;
   const daemonTargetIds = listDaemonSockets(config._socketDir).map(d => d.targetId);
   const daemonMatches = daemonTargetIds.filter(id => id.toUpperCase().startsWith(targetPrefix.toUpperCase()));
@@ -267,7 +283,7 @@ async function main() {
     targetId = resolvePrefix(targetPrefix, pages.map(p => p.targetId), 'target', 'Run "chromex list".');
   }
 
-  // Checar domínio da tab
+  // Check tab domain
   checkTargetDomain(targetId, config);
 
   const conn = await getOrStartTabDaemon(targetId, config);
@@ -276,7 +292,7 @@ async function main() {
   const noHints = args.includes('--no-hints');
   const cmdArgs = args.slice(1).filter(a => a !== '--no-snap' && a !== '--no-hints');
 
-  // Juntar argumentos para comandos que aceitam texto livre
+  // Join arguments for commands that accept free-form text
   if (cmd === 'eval') {
     const expr = cmdArgs.join(' ');
     if (!expr) { console.error('Error: expression required'); process.exit(1); }
@@ -320,7 +336,7 @@ async function main() {
   }
 }
 
-// Parser de flags simples: --flag (boolean) e --key value
+// Simple flag parser: --flag (boolean) and --key value
 function parseFlags(args, booleanFlags, valueFlags) {
   const result = {};
   let i = 0;
@@ -338,7 +354,7 @@ function parseFlags(args, booleanFlags, valueFlags) {
         i++;
       }
     } else {
-      // Argumento posicional -> assume URL
+      // Positional argument -> assume URL
       if (!result.url) result.url = arg;
       i++;
     }
@@ -346,7 +362,7 @@ function parseFlags(args, booleanFlags, valueFlags) {
   return result;
 }
 
-// Helper para list -- conectar via socket existente
+// Helper for list -- connect through an existing socket
 async function connectAndAuthFromSocket(socketPath) {
   const { getOrCreateToken } = await import('./lib/daemon.mjs');
   const authToken = getOrCreateToken(config);

@@ -1,6 +1,6 @@
 # Data Access
 
-Commands for managing cookies, browser storage, and exporting pages as PDF.
+Commands for managing cookies, browser storage, Application state, and exporting pages as PDF.
 
 ## Cookies
 
@@ -139,6 +139,58 @@ chromex eval <target> "localStorage.removeItem('cart_items')"
 # Get storage size
 chromex eval <target> "JSON.stringify(localStorage).length + ' bytes'"
 ```
+
+## Application State
+
+### Summary
+
+Show a compact overview of the current origin's Application panel state: quota, Cache Storage, IndexedDB, and Service Workers.
+
+```bash
+chromex app <target> summary
+```
+
+The summary includes origin, quota, localStorage/sessionStorage key counts, cookies, Cache Storage cache/entry counts, IndexedDB databases, active/waiting Service Workers, storage buckets, and manifest status.
+
+### Storage Usage and Site Data
+
+```bash
+# Quota and per-storage-type usage
+chromex storage <target> usage
+
+# Clear all site data for the current origin
+chromex storage <target> clear-site-data
+```
+
+### Service Workers
+
+```bash
+chromex sw <target>
+chromex sw <target> update https://example.com/
+chromex sw <target> skip-waiting https://example.com/
+chromex sw <target> unregister https://example.com/
+```
+
+### Cache Storage
+
+```bash
+chromex cache <target> list
+chromex cache <target> entries <cacheId> --query=/api
+chromex cache <target> body <cacheId> https://example.com/app.js
+chromex cache <target> delete-entry <cacheId> https://example.com/app.js
+chromex cache <target> delete <cacheId>
+```
+
+### IndexedDB
+
+```bash
+chromex idb <target> list
+chromex idb <target> schema app-db
+chromex idb <target> rows app-db users --limit=20
+chromex idb <target> clear app-db users
+```
+
+Destructive commands are explicit and named after the state they remove: `clear-site-data`, `unregister`, `delete-entry`, `delete`, and `clear`.
 
 ## PDF Export
 

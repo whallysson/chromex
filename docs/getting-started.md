@@ -51,7 +51,12 @@ chromex launch --profile testing
 
 # Combine flags
 chromex launch --browser chrome --incognito --url https://example.com
+
+# Launch a Chromium executable from a non-standard path
+chromex launch --browser-path /path/to/chrome --url https://example.com
 ```
+
+Chrome for Testing is supported as a manual browser option: download it from Google's official Chrome for Testing channel and pass its executable with `--browser-path` or `CHROMEX_BROWSER_PATH`. Chromex does not download or bundle browsers.
 
 ### Method B: Connect to an already-running browser
 
@@ -61,6 +66,12 @@ chromex launch --browser chrome --incognito --url https://example.com
 4. Run `chromex list` to verify the connection
 
 > **Note:** With Method B, Chrome will show an "Allow debugging" modal the first time you access each tab. The daemon keeps the session alive so you only see this once per tab.
+
+If browser discovery fails, run:
+
+```bash
+chromex doctor
+```
 
 ## Your First Commands
 
@@ -105,6 +116,7 @@ The CLI always tells you if a prefix is ambiguous — just use more characters.
 | Variable | Description |
 |----------|-------------|
 | `CDP_PORT_FILE` | Override the DevToolsActivePort file path. Useful for custom browser profiles or non-standard setups. |
+| `CHROMEX_BROWSER_PATH` | Default executable path used by `chromex launch` when your browser is not in a standard location. |
 
 ```bash
 # Connect to a browser launched with a custom profile
@@ -117,7 +129,7 @@ chromex list
 - [Inspect & Debug](./inspect.md) — screenshots, accessibility tree, refs, HTML, eval, network, performance, console
 - [Navigate & Interact](./navigate.md) — navigation, clicking, typing, scrolling, drag & drop, touch, dialogs
 - [Form Filling](./forms.md) — fill, clear, select, check, upload, batch fill with examples
-- [Data Access](./data.md) — cookies, localStorage, sessionStorage, PDF export
+- [Data Access](./data.md) — cookies, localStorage, sessionStorage, Application state, Cache Storage, IndexedDB, Service Workers, PDF export
 - [Network Control](./network.md) — throttling, interception, mocking, HAR recording
 - [Device Emulation](./emulation.md) — responsive testing, geolocation, timezone, CPU throttling
 - [Security](./security.md) — domain filtering, CDP blocklist, audit log, best practices

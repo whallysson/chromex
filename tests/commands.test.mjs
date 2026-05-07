@@ -7,6 +7,7 @@ import { parseKeyCombo, pressKeyStr } from '../plugins/chromex/skills/chromex/sc
 import { SessionStats, statsStr } from '../plugins/chromex/skills/chromex/scripts/lib/commands/stats.mjs';
 import { netListStr, netDetailStr } from '../plugins/chromex/skills/chromex/scripts/lib/commands/network.mjs';
 import { consoleListStr, consoleDetailStr } from '../plugins/chromex/skills/chromex/scripts/lib/commands/console.mjs';
+import { appStr, cacheStr, clearSiteDataStr, idbStr, serviceWorkersStr, storageUsageStr } from '../plugins/chromex/skills/chromex/scripts/lib/commands/app.mjs';
 
 // Mock CDP client that records sent commands
 function mockCdp() {
@@ -19,6 +20,293 @@ function mockCdp() {
     },
   };
 }
+
+function scriptedCdp(handlers = {}) {
+  const sent = [];
+  const eventHandlers = new Map();
+  const emit = (method, params) => {
+    for (const handler of eventHandlers.get(method) || []) handler(params);
+  };
+  return {
+    sent,
+    emit,
+    onEvent(method, handler) {
+      if (!eventHandlers.has(method)) eventHandlers.set(method, new Set());
+      eventHandlers.get(method).add(handler);
+      return () => eventHandlers.get(method)?.delete(handler);
+    },
+    async send(method, params, sid) {
+      sent.push({ method, params, sid });
+      if (method === 'Runtime.evaluate') {
+        if (params.expression.includes('localStorage.length')) {
+          return { result: { value: { localStorage: 18, sessionStorage: 2 } } };
+        }
+        return {
+          result: {
+            value: {
+              href: 'https://app.example.test/dashboard',
+              origin: 'https://app.example.test',
+              protocol: 'https:',
+              title: 'App',
+            },
+          },
+        };
+      }
+      const handler = handlers[method];
+      if (typeof handler === 'function') return handler(params, sid, { emit, sent });
+      if (handler instanceof Error) throw handler;
+      return handler || {};
+    },
+  };
+}
+
+// ---- Application state commands ----
+
+describe('Application state commands', () => {
+  it('formats storage usage and quota breakdown', async () => {
+    const cdp = scriptedCdp({
+      'Storage.getUsageAndQuota': {
+        usage: 1536,
+        quota: 1024 * 1024,
+        usageBreakdown: [
+          { storageType: 'indexeddb', usage: 1024 },
+          { storageType: 'cache_storage', usage: 512 },
+        ],
+      },
+    });
+
+    const output = await storageUsageStr(cdp, 'sid1');
+
+    expect(output).toContain('storage[2] used:1.5KB quota:1.0MB');
+    expect(output).toContain('origin: https://app.example.test');
+    expect(output).toContain('indexeddb');
+    expect(output).toContain('cache_storage');
+  });
+
+  it('clears all site data for the current origin', async () => {
+    const cdp = scriptedCdp({ 'Storage.clearDataForOrigin': {} });
+
+    const output = await clearSiteDataStr(cdp, 'sid1');
+
+    expect(output).toBe('Cleared site data for https://app.example.test (all).');
+    const call = cdp.sent.find(c => c.method === 'Storage.clearDataForOrigin');
+    expect(call.params).toEqual({ origin: 'https://app.example.test', storageTypes: 'all' });
+  });
+
+  it('lists cache storage entries by cache id prefix', async () => {
+    const cdp = scriptedCdp({
+      'CacheStorage.requestCacheNames': {
+        caches: [{ cacheId: 'cache-abcdef', cacheName: 'runtime-v1' }],
+      },
+      'CacheStorage.requestEntries': {
+        returnCount: 1,
+        cacheDataEntries: [{
+          requestURL: 'https://app.example.test/api/users',
+          requestMethod: 'GET',
+          responseStatus: 200,
+        }],
+      },
+    });
+
+    const output = await cacheStr(cdp, 'sid1', 'entries', 'cache-a', '10', '/api');
+
+    expect(output).toContain('cache.entries[1] shown:1 cache:runtime-v1');
+    expect(output).toContain('200 GET');
+    expect(output).toContain('/api/users');
+    const call = cdp.sent.find(c => c.method === 'CacheStorage.requestEntries');
+    expect(call.params).toEqual({
+      cacheId: 'cache-abcdef',
+      skipCount: 0,
+      pageSize: 10,
+      pathFilter: '/api',
+    });
+  });
+
+  it('accepts --query and --limit options for cache entries', async () => {
+    const cdp = scriptedCdp({
+      'CacheStorage.requestCacheNames': {
+        caches: [{ cacheId: 'cache-abcdef', cacheName: 'runtime-v1' }],
+      },
+      'CacheStorage.requestEntries': {
+        returnCount: 1,
+        cacheDataEntries: [{
+          requestURL: 'https://app.example.test/api/users',
+          requestMethod: 'GET',
+          responseStatus: 200,
+        }],
+      },
+    });
+
+    await cacheStr(cdp, 'sid1', 'entries', 'cache-a', '--query=/api', '--limit=7');
+
+    const call = cdp.sent.find(c => c.method === 'CacheStorage.requestEntries');
+    expect(call.params.pageSize).toBe(7);
+    expect(call.params.pathFilter).toBe('/api');
+  });
+
+  it('formats IndexedDB schema and rows', async () => {
+    const cdp = scriptedCdp({
+      'IndexedDB.enable': {},
+      'IndexedDB.requestDatabase': {
+        databaseWithObjectStores: {
+          name: 'app-db',
+          version: 3,
+          objectStores: [{
+            name: 'users',
+            keyPath: { type: 'string', string: 'id' },
+            autoIncrement: false,
+            indexes: [{ name: 'by_email', keyPath: { type: 'string', string: 'email' }, unique: true, multiEntry: false }],
+          }],
+        },
+      },
+      'IndexedDB.requestData': {
+        hasMore: false,
+        objectStoreDataEntries: [{
+          key: { value: 42 },
+          value: { description: 'Object {id: 42, name: "Ana"}' },
+        }],
+      },
+    });
+
+    const schema = await idbStr(cdp, 'sid1', 'schema', 'app-db');
+    const rows = await idbStr(cdp, 'sid1', 'rows', 'app-db', 'users', '--limit=5');
+
+    expect(schema).toContain('idb.schema[1] database:app-db version:3');
+    expect(schema).toContain('index by_email');
+    expect(rows).toContain('idb.rows[1] database:app-db store:users more:no');
+    expect(rows).toContain('Object {id: 42, name: "Ana"}');
+    const call = cdp.sent.find(c => c.method === 'IndexedDB.requestData');
+    expect(call.params.pageSize).toBe(5);
+  });
+
+  it('lists IndexedDB databases for the current origin', async () => {
+    const cdp = scriptedCdp({
+      'IndexedDB.enable': {},
+      'IndexedDB.requestDatabaseNames': { databaseNames: ['app-db', 'analytics-db'] },
+    });
+
+    const output = await idbStr(cdp, 'sid1', 'list');
+
+    expect(output).toContain('idb[2] origin:https://app.example.test');
+    expect(output).toContain('app-db');
+    expect(output).toContain('analytics-db');
+  });
+
+  it('collects Service Worker registrations from CDP events', async () => {
+    const cdp = scriptedCdp({
+      'ServiceWorker.enable': (_params, _sid, { emit }) => {
+        emit('ServiceWorker.workerRegistrationUpdated', {
+          registrations: [
+            { registrationId: 'reg1', scopeURL: 'https://app.example.test/' },
+            { registrationId: 'reg2', scopeURL: 'https://other.example.test/' },
+          ],
+        });
+        emit('ServiceWorker.workerVersionUpdated', {
+          versions: [
+            {
+              registrationId: 'reg1',
+              status: 'activated',
+              runningStatus: 'running',
+              scriptURL: 'https://app.example.test/sw.js',
+              controlledClients: ['target1'],
+            },
+            {
+              registrationId: 'reg2',
+              status: 'activated',
+              runningStatus: 'running',
+              scriptURL: 'https://other.example.test/sw.js',
+              controlledClients: [],
+            },
+          ],
+        });
+        return {};
+      },
+    });
+
+    const output = await serviceWorkersStr(cdp, 'sid1');
+
+    expect(output).toContain('sw[1] versions:1');
+    expect(output).toContain('https://app.example.test/');
+    expect(output).toContain('activated/running clients:1');
+    expect(output).not.toContain('other.example.test');
+  });
+
+  it('rejects Service Worker mutations outside the current origin', async () => {
+    const cdp = scriptedCdp();
+
+    await expect(
+      serviceWorkersStr(cdp, 'sid1', 'unregister', 'https://other.example.test/')
+    ).rejects.toThrow(/scopeURL must match current origin/);
+  });
+
+  it('formats a rich application summary', async () => {
+    const cdp = scriptedCdp({
+      'Storage.getUsageAndQuota': {
+        usage: 42 * 1024 * 1024,
+        quota: 2 * 1024 * 1024 * 1024,
+        usageBreakdown: [],
+      },
+      'Network.enable': {},
+      'Network.getCookies': { cookies: new Array(7).fill({ name: 'c', value: 'v' }) },
+      'Network.disable': {},
+      'CacheStorage.requestCacheNames': {
+        caches: [
+          { cacheId: 'cache-a', cacheName: 'runtime' },
+          { cacheId: 'cache-b', cacheName: 'assets' },
+        ],
+      },
+      'CacheStorage.requestEntries': (params) => ({
+        returnCount: params.cacheId === 'cache-a' ? 100 : 28,
+        cacheDataEntries: [],
+      }),
+      'IndexedDB.enable': {},
+      'IndexedDB.requestDatabaseNames': { databaseNames: ['app-db', 'analytics-db', 'queue-db'] },
+      'ServiceWorker.enable': (_params, _sid, { emit }) => {
+        emit('ServiceWorker.workerRegistrationUpdated', {
+          registrations: [{ registrationId: 'reg1', scopeURL: 'https://app.example.test/' }],
+        });
+        emit('ServiceWorker.workerVersionUpdated', {
+          versions: [
+            { registrationId: 'reg1', status: 'activated', runningStatus: 'running', scriptURL: 'https://app.example.test/sw.js', controlledClients: [] },
+            { registrationId: 'reg1', status: 'installed', runningStatus: 'stopped', scriptURL: 'https://app.example.test/sw.js', controlledClients: [] },
+          ],
+        });
+        return {};
+      },
+      'Storage.getStorageKey': { storageKey: 'https://app.example.test/' },
+      'Storage.setStorageBucketTracking': (params, _sid, { emit }) => {
+        if (params.enable) {
+          emit('Storage.storageBucketCreatedOrUpdated', {
+            bucketInfo: {
+              id: 'bucket1',
+              bucket: { storageKey: 'https://app.example.test/', name: 'default' },
+            },
+          });
+        }
+        return {};
+      },
+      'Page.enable': {},
+      'Page.getAppManifest': {
+        url: 'https://app.example.test/manifest.json',
+        data: '{"name":"Demo App"}',
+        errors: [],
+      },
+    });
+
+    const output = await appStr(cdp, 'sid1', 'summary');
+
+    expect(output).toContain('app:');
+    expect(output).toContain('origin: https://app.example.test');
+    expect(output).toContain('localStorage: 18 keys');
+    expect(output).toContain('sessionStorage: 2 keys');
+    expect(output).toContain('cookies: 7');
+    expect(output).toContain('caches: 2 caches, 128 entries');
+    expect(output).toContain('indexedDB: 3 databases');
+    expect(output).toContain('serviceWorkers: 1 active, 1 waiting');
+    expect(output).toContain('storageBuckets: 1 bucket');
+    expect(output).toContain('manifest: present (Demo App)');
+  });
+});
 
 // ---- Keyboard: parseKeyCombo ----
 
