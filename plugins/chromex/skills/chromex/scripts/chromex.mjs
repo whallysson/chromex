@@ -34,7 +34,7 @@ const NEEDS_TARGET = new Set([
   'trace', 'heap', 'webauthn', 'drag', 'touch', 'domsnapshot', 'highlight',
   'hover', 'key', 'resize', 'audit', 'stats',
   // Application state
-  'app', 'sw', 'cache', 'idb', 'state', 'locator',
+  'app', 'sw', 'cache', 'idb', 'state', 'locator', 'evidence',
 ]);
 
 const SESSION_PERSIST_COMMANDS = new Set([
@@ -91,6 +91,7 @@ Usage: chromex [--raw] [--json] [-s name] <command> [args]
     console <target> detail <id>        Message detail with stack trace
     domsnapshot <target> [--styles]     Structured DOM snapshot with bounding rects
     highlight <target> <sel|clear>      Highlight element with overlay
+    evidence <target> <action> [label]  Evidence pack: start, mark, stop, status, replay, capture
 
   EVALUATE
     eval    <target> <expr>             Evaluate JS expression

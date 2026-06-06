@@ -52,6 +52,7 @@ import { SessionStats, statsStr } from './commands/stats.mjs';
 import { appStr, cacheStr, idbStr, serviceWorkersStr } from './commands/app.mjs';
 import { stateStr } from './commands/state.mjs';
 import { actionCodeStr, locatorStr } from './commands/locator.mjs';
+import { evidenceStr, recordEvidenceAction } from './commands/evidence.mjs';
 import { writeTextArtifact } from './artifacts.mjs';
 import { generateHints, renderHints, isRefMapFresh } from './hints.mjs';
 import { sleep } from './utils.mjs';
@@ -141,6 +142,7 @@ export async function runDaemon(targetId, config) {
   // in a multi-field form instead of re-suggesting the one we just touched.
   let lastFilledRef = null;
   const sessionStats = new SessionStats();
+  const evidenceState = { active: null, last: null };
 
   // Network request tracking (CDP Network domain) for detail drill-down
   const networkRequests = new Map();
@@ -408,6 +410,13 @@ export async function runDaemon(targetId, config) {
           result = await locatorStr(cdp, sessionId, currentRefMap, locatorTarget, format);
           break;
         }
+        case 'evidence': {
+          result = await evidenceStr(cdp, sessionId, targetId, evidenceState, args[0], args.slice(1).join(' '), {
+            consoleMessages,
+            networkRequests,
+          });
+          break;
+        }
         case 'app':
           result = await appStr(cdp, sessionId, args[0]);
           break;
@@ -589,6 +598,7 @@ export async function runDaemon(targetId, config) {
       }
 
       sessionStats.record(cmd, args, startMs, Date.now(), true, null);
+      recordEvidenceAction(evidenceState, cmd, args, true, commandResult.text);
       return {
         ok: true,
         result: commandResult.text ?? '',
@@ -599,6 +609,7 @@ export async function runDaemon(targetId, config) {
       auditResult.ok = false;
       audit(cmd, targetId, args, auditResult, config);
       sessionStats.record(cmd, args, startMs, Date.now(), false, e.message);
+      recordEvidenceAction(evidenceState, cmd, args, false, e.message);
       return { ok: false, error: e.message };
     }
   }

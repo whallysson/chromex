@@ -199,6 +199,14 @@ const TOOLS = [
       format: { type: 'string', enum: ['chromex-test', 'css', 'testing-library'], description: 'Locator output format', default: 'chromex-test' },
     }, ['target', 'selector'], RO),
 
+  tool('chromex_evidence',
+    'Create an evidence pack with screenshots, snapshots, HTML, console, network timeline, and local replay HTML.',
+    {
+      target: P_TARGET,
+      action: { type: 'string', enum: ['start', 'mark', 'stop', 'status', 'replay', 'capture'], description: 'Evidence action' },
+      label: { type: 'string', description: 'Pack name for start/capture or mark label for mark/stop' },
+    }, ['target', 'action'], RO),
+
   // == EVALUATE ==
   tool('chromex_eval',
     'Evaluate JavaScript expression in page context. Returns serialized result.',
@@ -707,6 +715,7 @@ function toolToCmd(name, p) {
     case 'chromex_domsnapshot': return { cmd: 'domsnapshot', args: p.styles ? ['--styles'] : [] };
     case 'chromex_highlight':  return { cmd: 'highlight', args: [p.selector] };
     case 'chromex_locator':    return { cmd: 'locator', args: [p.selector, p.format ? `--format=${p.format}` : '--format=chromex-test'] };
+    case 'chromex_evidence':   return { cmd: 'evidence', args: [p.action, ...(p.label ? [p.label] : [])] };
 
     // Evaluate
     case 'chromex_eval':       return { cmd: 'eval', args: [p.expression] };

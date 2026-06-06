@@ -71,7 +71,7 @@ describe('MCP Protocol', () => {
     expect(r.result.serverInfo.version).toBe('1.6.0');
   });
 
-  it('tools/list returns 77 tools', async () => {
+  it('tools/list returns 78 tools', async () => {
     const responses = await mcpSession([
       INIT,
       INITIALIZED,
@@ -79,7 +79,7 @@ describe('MCP Protocol', () => {
     ]);
     const r = findById(responses, 1);
     expect(r).toBeDefined();
-    expect(r.result.tools).toHaveLength(77);
+    expect(r.result.tools).toHaveLength(78);
   });
 
   it('noHints is declared on all tools that accept noSnap (P2 regression guard)', async () => {
@@ -217,7 +217,7 @@ describe('Tool Definitions', () => {
     const readOnlyTools = ['chromex_list', 'chromex_doctor', 'chromex_sessions', 'chromex_show',
       'chromex_snapshot', 'chromex_html',
       'chromex_screenshot', 'chromex_network', 'chromex_perf', 'chromex_console',
-      'chromex_domsnapshot', 'chromex_locator', 'chromex_waitfor', 'chromex_wait', 'chromex_heap',
+      'chromex_domsnapshot', 'chromex_locator', 'chromex_evidence', 'chromex_waitfor', 'chromex_wait', 'chromex_heap',
       'chromex_storage_usage', 'chromex_app_summary', 'chromex_service_workers',
       'chromex_cache_list', 'chromex_cache_entries', 'chromex_cache_body',
       'chromex_indexeddb_list', 'chromex_indexeddb_schema', 'chromex_indexeddb_rows'];
@@ -419,7 +419,7 @@ describe('Tool Names', () => {
     'chromex_focus', 'chromex_incognito', 'chromex_stop', 'chromex_sessions', 'chromex_show',
     'chromex_snapshot', 'chromex_html', 'chromex_screenshot',
     'chromex_network', 'chromex_perf', 'chromex_console',
-    'chromex_domsnapshot', 'chromex_highlight', 'chromex_locator',
+    'chromex_domsnapshot', 'chromex_highlight', 'chromex_locator', 'chromex_evidence',
     'chromex_eval', 'chromex_evalraw',
     'chromex_navigate', 'chromex_waitfor', 'chromex_wait', 'chromex_scroll',
     'chromex_click', 'chromex_clickxy', 'chromex_type', 'chromex_hover',

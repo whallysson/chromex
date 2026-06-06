@@ -83,11 +83,20 @@ try {
   const locator = await json(['-s', session, 'locator', '@e1', '--format=chromex-test']);
   if (!locator.text.includes('getByTestId')) throw new Error('locator did not use test id');
 
+  const evidenceStart = await json(['-s', session, 'evidence', 'start', 'smoke-flow']);
+  if (!evidenceStart.ok || !evidenceStart.artifacts.some(item => item.type === 'evidence-replay')) throw new Error('evidence start artifact missing');
+
   await json(['-s', session, 'fill', '@e1', 'smoke@example.test']);
   await json(['-s', session, 'click', '@e2']);
 
+  const evidenceMark = await json(['-s', session, 'evidence', 'mark', 'after save']);
+  if (!evidenceMark.ok || evidenceMark.data.markCount < 2) throw new Error('evidence mark missing');
+
   const state = await json(['-s', session, 'state', 'save', '.chromex/storage/smoke.json']);
   if (!state.ok || !state.artifacts.length) throw new Error('state artifact missing');
+
+  const evidenceStop = await json(['-s', session, 'evidence', 'stop']);
+  if (!evidenceStop.ok || !evidenceStop.artifacts.some(item => item.type === 'evidence')) throw new Error('evidence pack missing');
 
   const show = await json(['show', '--annotate']);
   if (!show.structuredContent && !show.artifacts?.length) throw new Error('show artifact missing');

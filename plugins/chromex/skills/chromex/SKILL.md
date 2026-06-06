@@ -6,7 +6,7 @@ version: 1.6.0
 
 # Chromex -- Chrome DevTools Protocol CLI
 
-Zero-dependency CDP CLI for AI agents. Connects to Chrome/Brave/Edge via WebSocket. Per-tab persistent daemons, security hardened, 77 MCP tools.
+Zero-dependency CDP CLI for AI agents. Connects to Chrome/Brave/Edge via WebSocket. Per-tab persistent daemons, security hardened, 78 MCP tools.
 
 ## Prerequisites
 
@@ -92,6 +92,10 @@ chromex.mjs console <target> list               # stored messages since daemon s
 chromex.mjs console <target> detail <id>        # message detail with stack trace
 chromex.mjs domsnapshot <target> [--styles]     # structured DOM with bounding rects
 chromex.mjs highlight <target> <sel|clear>      # highlight element with overlay
+chromex.mjs evidence <target> start checkout    # start evidence pack
+chromex.mjs evidence <target> mark "after login"
+chromex.mjs evidence <target> stop              # finalize replay + JSON pack
+chromex.mjs evidence <target> replay            # show replay path
 ```
 
 ### Evaluate
@@ -170,6 +174,17 @@ chromex.mjs intercept <target> block "*.tracker.*" --abort=blockedbyclient
 chromex.mjs intercept <target> on --remove-header=authorization
 chromex.mjs har     <target> start|stop [file]  # record HTTP traffic as HAR
 ```
+
+### Evidence Packs
+
+```bash
+chromex.mjs evidence <target> start checkout-flow
+chromex.mjs evidence <target> mark "after login"
+chromex.mjs evidence <target> stop
+chromex.mjs evidence <target> replay
+```
+
+Evidence packs write screenshots, snapshots, HTML, console JSON, network JSON, action timeline, `evidence.json`, and `index.html` under `~/.chromex/artifacts/<workspace>/evidence/`.
 
 ### Release Smoke
 

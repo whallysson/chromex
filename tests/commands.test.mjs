@@ -14,6 +14,7 @@ import { stateStr } from '../plugins/chromex/skills/chromex/scripts/lib/commands
 import { buildLocator } from '../plugins/chromex/skills/chromex/scripts/lib/commands/locator.mjs';
 import { interceptStr } from '../plugins/chromex/skills/chromex/scripts/lib/commands/intercept.mjs';
 import { showStr } from '../plugins/chromex/skills/chromex/scripts/lib/commands/show.mjs';
+import { evidenceStr, recordEvidenceAction } from '../plugins/chromex/skills/chromex/scripts/lib/commands/evidence.mjs';
 import { sessionStatePath } from '../plugins/chromex/skills/chromex/scripts/lib/sessions.mjs';
 
 // Mock CDP client that records sent commands
@@ -120,6 +121,46 @@ function showCdp() {
       }
       if (method === 'DOM.getBoxModel') {
         return { model: { border: [10, 20, 90, 20, 90, 60, 10, 60] } };
+      }
+      return {};
+    },
+  };
+}
+
+function evidenceCdp() {
+  const sent = [];
+  return {
+    sent,
+    async send(method, params, sid) {
+      sent.push({ method, params, sid });
+      if (method === 'Page.captureScreenshot') return { data: Buffer.from('evidence').toString('base64') };
+      if (method === 'Runtime.evaluate') {
+        if (params.expression.includes('document.documentElement.outerHTML')) {
+          return { result: { value: '<html><body><button>Save</button></body></html>' } };
+        }
+        if (params.expression.includes('JSON.stringify({')) {
+          return {
+            result: {
+              value: JSON.stringify({
+                url: 'https://app.example.test/checkout',
+                title: 'Checkout',
+                viewport: { width: 1280, height: 720, devicePixelRatio: 2 },
+              }),
+            },
+          };
+        }
+        return { result: { value: undefined } };
+      }
+      if (method === 'Accessibility.getFullAXTree') {
+        return {
+          nodes: [
+            { nodeId: '1', role: { value: 'RootWebArea' }, name: { value: 'Checkout' }, childIds: ['2'], backendDOMNodeId: 1, properties: [] },
+            { nodeId: '2', parentId: '1', role: { value: 'button' }, name: { value: 'Save' }, backendDOMNodeId: 2, properties: [] },
+          ],
+        };
+      }
+      if (method === 'DOM.getBoxModel') {
+        return { model: { border: [0, 0, 100, 0, 100, 50, 0, 50] } };
       }
       return {};
     },
@@ -485,6 +526,39 @@ describe('Named session persistence', () => {
     const path = sessionStatePath('auth');
 
     expect(path).toContain('/.chromex/session-data/auth/storage-state.json');
+  });
+});
+
+describe('Evidence pack command', () => {
+  it('captures screenshots, snapshots, html, timelines and replay artifacts', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'chromex-evidence-'));
+    const previousArtifactRoot = process.env.CHROMEX_ARTIFACT_ROOT;
+    process.env.CHROMEX_ARTIFACT_ROOT = join(dir, 'artifacts');
+    const state = { active: null, last: null };
+    const cdp = evidenceCdp();
+    const networkRequests = new Map([['req1', { url: 'https://app.example.test/api', method: 'GET', status: 200 }]]);
+    const consoleMessages = [{ id: 0, ts: Date.now(), type: 'log', args: ['ready'] }];
+
+    try {
+      await evidenceStr(cdp, 'sid1', 'target1', state, 'start', 'checkout flow', { networkRequests, consoleMessages });
+      recordEvidenceAction(state, 'fill', ['@e1', 'secret@example.test'], true, 'filled');
+      const output = await evidenceStr(cdp, 'sid1', 'target1', state, 'stop', 'after save', { networkRequests, consoleMessages });
+      const evidence = JSON.parse(readFileSync(output.data.evidence, 'utf8'));
+      const timeline = JSON.parse(readFileSync(join(output.data.root, 'timeline.json'), 'utf8'));
+
+      expect(output.text).toContain('Evidence pack stopped');
+      expect(existsSync(output.data.replay)).toBe(true);
+      expect(existsSync(join(output.data.root, 'console.json'))).toBe(true);
+      expect(existsSync(join(output.data.root, 'network.json'))).toBe(true);
+      expect(evidence.marks).toHaveLength(2);
+      expect(timeline.some(item => item.type === 'action' && item.args.includes('<redacted>'))).toBe(true);
+      expect(readFileSync(output.data.replay, 'utf8')).toContain('Chromex Evidence');
+      expect(output.artifacts.some(item => item.type === 'evidence-replay')).toBe(true);
+    } finally {
+      if (previousArtifactRoot === undefined) delete process.env.CHROMEX_ARTIFACT_ROOT;
+      else process.env.CHROMEX_ARTIFACT_ROOT = previousArtifactRoot;
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
 

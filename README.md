@@ -4,14 +4,14 @@
 [![Node.js 22+](https://img.shields.io/badge/node-%3E%3D22.0.0-brightgreen.svg)](https://nodejs.org/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-Chromex is a zero-dependency Chrome DevTools Protocol toolkit for AI agents. It connects directly to Chrome, Brave, Edge, Chromium, and Vivaldi through CDP, exposing a token-efficient CLI and an optional MCP server with 77 typed tools.
+Chromex is a zero-dependency Chrome DevTools Protocol toolkit for AI agents. It connects directly to Chrome, Brave, Edge, Chromium, and Vivaldi through CDP, exposing a token-efficient CLI and an optional MCP server with 78 typed tools.
 
 Use Chromex when an agent needs to inspect pages, take screenshots, navigate, click, fill forms, read console/network activity, emulate devices, throttle network/CPU, export PDFs, or run browser diagnostics without pulling in heavy browser automation runtimes.
 
 ## Why Chromex
 
 - **CLI-first for lower token usage**: terminal commands return compact plain text and avoid MCP tool-schema overhead.
-- **Optional MCP server**: 77 typed tools for Claude Code and other MCP clients when tool discovery, typed parameters, and inline screenshots matter more than token budget.
+- **Optional MCP server**: 78 typed tools for Claude Code and other MCP clients when tool discovery, typed parameters, and inline screenshots matter more than token budget.
 - **No runtime dependencies**: Node.js 22+ built-ins only, including native WebSocket support.
 - **Agent-friendly page model**: accessibility snapshots, `@eN` refs, incremental diffs, query filters, auto-snapshots, and contextual hints.
 - **Persistent per-tab daemons**: one CDP session per tab, held open through an authenticated Unix socket.
@@ -28,6 +28,7 @@ Use Chromex when an agent needs to inspect pages, take screenshots, navigate, cl
 - Debug production behavior with console history, network request details, response bodies, HAR export, request blocking, API mocking, throttling, and offline mode.
 - Test browser conditions with device presets, viewport resizing, DPR, geolocation, timezone, locale, CPU throttling, incognito contexts, proxies, and custom Chrome flags.
 - Diagnose performance and quality with Core Web Vitals, transfer size, DOM/memory counters, Lighthouse audits, JS/CSS coverage, Chrome traces, and heap snapshots.
+- Build evidence packs with screenshots, snapshots, HTML, console, network timeline, action timeline, and replay HTML.
 - Validate modern browser flows such as passkey/WebAuthn registration and login, downloads, cookies, portable storage state, PDF export, and isolated profiles.
 - Inspect Application panel state from the terminal: origin quota, storage usage breakdown, Cache Storage entries/bodies, IndexedDB schemas/rows, and Service Worker registrations.
 - Turn `@eN` refs into locators and optional `chromex-test` action code.
@@ -236,7 +237,7 @@ claude mcp add chromex npx chromex-mcp@latest
 claude mcp add chromex bunx chromex-mcp@latest
 ```
 
-After setup, the MCP client can call tools such as `chromex_list`, `chromex_snapshot`, `chromex_click`, `chromex_fill`, `chromex_screenshot`, `chromex_console`, `chromex_network`, `chromex_app_summary`, `chromex_cache_entries`, `chromex_indexeddb_rows`, `chromex_sessions`, `chromex_show`, `chromex_locator`, and `chromex_state`.
+After setup, the MCP client can call tools such as `chromex_list`, `chromex_snapshot`, `chromex_click`, `chromex_fill`, `chromex_screenshot`, `chromex_console`, `chromex_network`, `chromex_app_summary`, `chromex_cache_entries`, `chromex_indexeddb_rows`, `chromex_sessions`, `chromex_show`, `chromex_locator`, `chromex_state`, and `chromex_evidence`.
 
 Tools that produce machine-readable data or artifacts also include MCP `structuredContent`, so agents can read paths and metadata without parsing the human text block.
 
@@ -323,6 +324,10 @@ chromex console <target> list
 chromex net <target>
 chromex perf <target>
 chromex domsnapshot <target> --styles
+chromex evidence <target> start checkout-flow
+chromex evidence <target> mark "after login"
+chromex evidence <target> stop
+chromex evidence <target> replay
 ```
 
 ### Navigate and Wait
@@ -520,6 +525,21 @@ chromex locator <target> @e5 --format=css
 chromex locator <target> @e5 --format=testing-library
 chromex fill <target> @e1 "user@example.com" --code=chromex-test
 ```
+
+### Evidence Packs
+
+Evidence packs collect browser evidence without recording video:
+
+```bash
+chromex evidence <target> start checkout-flow
+chromex click <target> @e3
+chromex fill <target> @e5 "user@example.com"
+chromex evidence <target> mark "after login"
+chromex evidence <target> stop
+chromex evidence <target> replay
+```
+
+Each pack is written under `~/.chromex/artifacts/<workspace>/evidence/` and includes screenshots, accessibility snapshots with boxes, HTML captures, console JSON, network JSON, action timeline, `evidence.json`, and `index.html` for local replay. Values passed to `fill`, `type`, and `form` are redacted from the action timeline.
 
 ## Application State Suite
 
