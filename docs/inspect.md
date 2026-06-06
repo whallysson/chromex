@@ -8,18 +8,18 @@ Capture the visible viewport or the entire page.
 
 ```bash
 # Viewport screenshot (what you see on screen)
-chromex shot <target> /tmp/page.png
+chromex shot <target>
 
 # Full page screenshot (captures everything, including below the fold)
-chromex shot <target> /tmp/full.png --full
+chromex shot <target> ~/.chromex/screenshots/full.png --full
 
-# Default path: /tmp/screenshot.png
+# Default path: ~/.chromex/artifacts/<workspace>/screenshots/screenshot-<timestamp>.png
 chromex shot <target>
 ```
 
 **Output:**
 ```
-/tmp/page.png
+~/.chromex/artifacts/<workspace>/screenshots/screenshot-<timestamp>.png
 Screenshot saved (viewport only). DPR: 2
 Coordinate mapping: CSS px = screenshot px / 2
   e.g. screenshot (200, 400) -> clickxy <target> 100 200

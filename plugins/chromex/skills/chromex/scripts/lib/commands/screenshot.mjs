@@ -1,6 +1,7 @@
 // Screenshot (viewport + full page)
 
 import { writeFileSync } from 'fs';
+import { resolveArtifactPath, timestamp } from '../artifacts.mjs';
 import { evalStr } from './evaluate.mjs';
 
 export async function shotStr(cdp, sid, filePath, fullPage = false, config, options = {}) {
@@ -61,10 +62,11 @@ export async function shotStr(cdp, sid, filePath, fullPage = false, config, opti
 
   const { data } = await cdp.send('Page.captureScreenshot', screenshotParams, sid);
 
-  // Determine output extension based on format
   const ext = format === 'jpeg' ? '.jpg' : `.${format}`;
-  const defaultPath = `/tmp/screenshot${ext}`;
-  const out = filePath || config?.defaultScreenshotPath || defaultPath;
+  const configuredPath = config?.defaultScreenshotPath && config.defaultScreenshotPath !== '/tmp/screenshot.png'
+    ? config.defaultScreenshotPath
+    : null;
+  const out = resolveArtifactPath(filePath || configuredPath || null, 'screenshots', `screenshot-${timestamp()}${ext}`);
   writeFileSync(out, Buffer.from(data, 'base64'));
 
   const lines = [out];

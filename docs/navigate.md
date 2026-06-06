@@ -308,7 +308,7 @@ TARGET="6BE827FA"
 chromex nav $TARGET "https://example.com/dashboard"
 chromex waitfor $TARGET ".chart-loaded"
 chromex scroll $TARGET to ".revenue-chart"
-chromex shot $TARGET /tmp/revenue.png
+chromex shot $TARGET ~/.chromex/screenshots/revenue.png
 ```
 
 ### Debug a failing page

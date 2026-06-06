@@ -69,7 +69,7 @@ CHROMEX_SESSION=auth chromex.mjs snap --refs        # default named session
 ```
 
 MCP responses that contain command data or artifacts include `structuredContent` alongside the text block.
-Generated artifacts default to `~/.chromex/artifacts/<workspace>/`. Explicit file paths are respected as provided.
+Generated artifacts default to `~/.chromex/artifacts/<workspace>/`. Paths under `.chromex/...` or `~/.chromex/...` resolve to `~/.chromex/...`; other explicit file paths are respected as provided.
 
 ### Inspect
 
@@ -79,7 +79,7 @@ chromex.mjs snap    <target> --refs             # with interactive refs (@e1, @e
 chromex.mjs snap    <target> --refs --full      # force full snapshot (skip diff)
 chromex.mjs snap    <target> --depth=2          # limit tree depth
 chromex.mjs snap    <target> --query=login      # filter to matches + ancestors (refs stay stable)
-chromex.mjs snap    <target> --filename=.chromex/snapshots/page.yml --boxes
+chromex.mjs snap    <target> --filename=~/.chromex/snapshots/page.yml --boxes
 chromex.mjs html    <target> [selector]         # full page or element HTML
 chromex.mjs shot    <target> [file] [--full]    # screenshot (viewport or full page)
 chromex.mjs shot    <target> --format=jpeg --quality=80  # JPEG/WebP with quality
@@ -153,8 +153,8 @@ chromex.mjs upload  <target> <selector> <files> # upload file(s) to input[type=f
 ```bash
 chromex.mjs cookies <target> [list|set|clear]   # cookie management
 chromex.mjs storage <target> local|session|clear|usage|clear-site-data
-chromex.mjs state   <target> save .chromex/storage/auth.json
-chromex.mjs state   <target> load .chromex/storage/auth.json
+chromex.mjs state   <target> save ~/.chromex/storage/auth.json
+chromex.mjs state   <target> load ~/.chromex/storage/auth.json
 chromex.mjs app     <target> summary            # Application state summary
 chromex.mjs sw      <target> [action] [scope]   # Service Workers
 chromex.mjs cache   <target> entries <cacheId> --query=/api
@@ -224,7 +224,7 @@ chromex.mjs audit   <target> accessibility desktop   # specific category + devic
 chromex.mjs stats   <target>                    # session analytics (commands, timing, errors)
 chromex.mjs stats   <target> --full             # full timeline
 chromex.mjs stats   <target> --reset            # reset counters
-chromex.mjs stats   <target> --export=/tmp/s.json  # export as JSON
+chromex.mjs stats   <target> --export=~/.chromex/stats/session.json  # export as JSON
 ```
 
 ## Ref-Based Selection

@@ -4,6 +4,7 @@
 
 import { execSync } from 'child_process';
 import { existsSync } from 'fs';
+import { resolveArtifactPath } from '../artifacts.mjs';
 import { evalStr } from './evaluate.mjs';
 
 const VALID_CATEGORIES = ['performance', 'accessibility', 'seo', 'best-practices'];
@@ -64,7 +65,7 @@ export async function auditStr(cdp, sid, categories, device, reportPath) {
   if (device === 'desktop') args.push('--preset=desktop');
 
   if (reportPath) {
-    args.push(`--output-path=${reportPath}`);
+    args.push(`--output-path=${resolveArtifactPath(reportPath, 'audits')}`);
     args.push('--output=html');
     args.push('--output=json');
   }

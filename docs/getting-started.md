@@ -85,7 +85,7 @@ chromex list
 # 8D4E5B12  Stack Overflow - Questions     https://stackoverflow.com
 
 # 2. Take a screenshot of a tab (use the prefix from list)
-chromex shot 6BE8 /tmp/github.png
+chromex shot 6BE8
 
 # 3. Get the page title
 chromex eval 6BE8 "document.title"

@@ -198,15 +198,15 @@ Save the current page as a PDF file. Uses Chrome's built-in print-to-PDF with ba
 
 ```bash
 # Save to specific path
-chromex pdf <target> /tmp/report.pdf
+chromex pdf <target> ~/.chromex/pdf/report.pdf
 
-# Default path: /tmp/page.pdf
+# Default path: ~/.chromex/artifacts/<workspace>/pdf/page-<timestamp>.pdf
 chromex pdf <target>
 ```
 
 **Output:**
 ```
-PDF saved to /tmp/report.pdf
+PDF saved to ~/.chromex/pdf/report.pdf
 ```
 
 ### PDF Features
@@ -222,14 +222,14 @@ PDF saved to /tmp/report.pdf
 # Export an invoice
 chromex nav <target> "https://app.example.com/invoices/123"
 chromex waitfor <target> ".invoice-loaded"
-chromex pdf <target> /tmp/invoice-123.pdf
+chromex pdf <target> ~/.chromex/pdf/invoice-123.pdf
 
 # Export a dashboard report
 chromex nav <target> "https://dashboard.example.com/weekly"
 chromex waitfor <target> ".charts-rendered"
-chromex pdf <target> /tmp/weekly-report.pdf
+chromex pdf <target> ~/.chromex/pdf/weekly-report.pdf
 
 # Export documentation page
 chromex nav <target> "https://docs.example.com/api"
-chromex pdf <target> /tmp/api-docs.pdf
+chromex pdf <target> ~/.chromex/pdf/api-docs.pdf
 ```

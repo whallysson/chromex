@@ -33,7 +33,7 @@ All security settings live in `~/.chromex/config.json` (auto-created on first ru
   ],
   "auditLog": true,
   "socketAuth": true,
-  "defaultScreenshotPath": "/tmp/screenshot.png"
+  "defaultScreenshotPath": null
 }
 ```
 

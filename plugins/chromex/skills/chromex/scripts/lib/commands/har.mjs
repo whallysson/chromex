@@ -1,6 +1,7 @@
 // HAR (HTTP Archive) recording via Network domain
 
 import { writeFileSync } from 'fs';
+import { resolveArtifactPath, timestamp } from '../artifacts.mjs';
 
 let recording = false;
 const entries = [];
@@ -90,7 +91,7 @@ export async function harStr(cdp, sid, action, filePath) {
         },
       };
 
-      const out = filePath || '/tmp/chromex.har';
+      const out = resolveArtifactPath(filePath || null, 'har', `network-${timestamp()}.har`);
       writeFileSync(out, JSON.stringify(har, null, 2));
       return `HAR saved to ${out} (${entries.length} entries).`;
     }

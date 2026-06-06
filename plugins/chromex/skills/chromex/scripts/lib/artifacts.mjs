@@ -7,12 +7,12 @@ export function workspaceArtifactRoot() {
   if (process.env.CHROMEX_ARTIFACT_ROOT) {
     return expandHome(process.env.CHROMEX_ARTIFACT_ROOT);
   }
-  return resolve(homedir(), '.chromex', 'artifacts', workspaceKey());
+  return resolve(chromexHome(), 'artifacts', workspaceKey());
 }
 
 export function resolveArtifactPath(filePath, category = 'artifacts', fileName = null) {
   const path = filePath
-    ? resolveExplicitPath(filePath)
+    ? resolveChromexPath(filePath)
     : resolve(workspaceArtifactRoot(), category, fileName || `${category}-${timestamp()}.txt`);
   const dir = dirname(path);
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true, mode: 0o700 });
@@ -29,8 +29,15 @@ export function timestamp() {
   return new Date().toISOString().replace(/[:.]/g, '-');
 }
 
-function resolveExplicitPath(filePath) {
+export function chromexHome() {
+  return resolve(homedir(), '.chromex');
+}
+
+export function resolveChromexPath(filePath) {
   const expanded = expandHome(filePath);
+  if (/^(?:\.[\\/])?\.chromex(?:[\\/]|$)/.test(expanded)) {
+    return resolve(chromexHome(), expanded.replace(/^(?:\.[\\/])?\.chromex[\\/]?/, ''));
+  }
   return isAbsolute(expanded) ? expanded : resolve(process.cwd(), expanded);
 }
 

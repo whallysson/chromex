@@ -44,7 +44,7 @@ Control how the browser handles file downloads.
 
 ```bash
 # Auto-accept downloads to a specific directory
-chromex download <target> allow /tmp/downloads
+chromex download <target> allow ~/.chromex/downloads
 
 # Block all downloads
 chromex download <target> deny
@@ -117,8 +117,8 @@ chromex scroll <target> bottom
 chromex click <target> ".load-more"
 
 # Stop and save trace
-chromex trace <target> stop /tmp/trace.json
-# Output: Trace saved to /tmp/trace.json (1523 events). Open in chrome://tracing or Perfetto UI.
+chromex trace <target> stop ~/.chromex/traces/trace.json
+# Output: Trace saved to ~/.chromex/traces/trace.json (1523 events). Open in chrome://tracing or Perfetto UI.
 ```
 
 ### Custom Categories
@@ -139,8 +139,8 @@ chromex trace <target> start "devtools.timeline,v8.execute,blink.user_timing"
 Capture a snapshot of the JavaScript heap for memory leak analysis.
 
 ```bash
-chromex heap <target> snapshot /tmp/heap.heapsnapshot
-# Output: Heap snapshot saved to /tmp/heap.heapsnapshot (12.5MB).
+chromex heap <target> snapshot ~/.chromex/heap/heap.heapsnapshot
+# Output: Heap snapshot saved to ~/.chromex/heap/heap.heapsnapshot (12.5MB).
 ```
 
 ### Viewing Snapshots
@@ -154,7 +154,7 @@ chromex heap <target> snapshot /tmp/heap.heapsnapshot
 
 ```bash
 # Take snapshot before the action
-chromex heap <target> snapshot /tmp/before.heapsnapshot
+chromex heap <target> snapshot ~/.chromex/heap/before.heapsnapshot
 
 # Perform the suspected leaky action multiple times
 for i in $(seq 1 10); do
@@ -164,7 +164,7 @@ for i in $(seq 1 10); do
 done
 
 # Take snapshot after
-chromex heap <target> snapshot /tmp/after.heapsnapshot
+chromex heap <target> snapshot ~/.chromex/heap/after.heapsnapshot
 
 # Compare both snapshots in Chrome DevTools Memory tab
 ```

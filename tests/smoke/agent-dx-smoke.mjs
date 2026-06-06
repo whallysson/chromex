@@ -77,7 +77,7 @@ try {
 
   const session = `smoke-${Date.now()}`;
   await json(['-s', session, 'open', url]);
-  const snap = await json(['-s', session, 'snap', '--refs', '--filename=.chromex/snapshots/smoke.yml', '--boxes']);
+  const snap = await json(['-s', session, 'snap', '--refs', `--filename=${join(workspace, 'snapshots', 'smoke.yml')}`, '--boxes']);
   if (!snap.ok || !snap.artifacts.length) throw new Error('snapshot artifact missing');
 
   const locator = await json(['-s', session, 'locator', '@e1', '--format=chromex-test']);
@@ -92,7 +92,7 @@ try {
   const evidenceMark = await json(['-s', session, 'evidence', 'mark', 'after save']);
   if (!evidenceMark.ok || evidenceMark.data.markCount < 2) throw new Error('evidence mark missing');
 
-  const state = await json(['-s', session, 'state', 'save', '.chromex/storage/smoke.json']);
+  const state = await json(['-s', session, 'state', 'save', join(workspace, 'storage', 'smoke.json')]);
   if (!state.ok || !state.artifacts.length) throw new Error('state artifact missing');
 
   const evidenceStop = await json(['-s', session, 'evidence', 'stop']);

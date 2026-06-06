@@ -157,7 +157,7 @@ chromex form $TARGET '{
 }'
 
 # 4. Take a screenshot to verify
-chromex shot $TARGET /tmp/form-filled.png
+chromex shot $TARGET ~/.chromex/screenshots/form-filled.png
 
 # 5. Submit the form
 chromex click $TARGET "button[type=submit]"

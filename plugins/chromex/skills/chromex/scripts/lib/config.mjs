@@ -67,7 +67,7 @@ const DEFAULTS = {
   ],
   auditLog: true,
   socketAuth: true,
-  defaultScreenshotPath: '/tmp/screenshot.png',
+  defaultScreenshotPath: null,
 };
 
 export function loadConfig() {

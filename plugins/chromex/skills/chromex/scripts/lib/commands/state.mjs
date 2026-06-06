@@ -1,5 +1,5 @@
 import { readFileSync } from 'fs';
-import { timestamp, writeTextArtifact } from '../artifacts.mjs';
+import { resolveChromexPath, timestamp, writeTextArtifact } from '../artifacts.mjs';
 import { evalStr } from './evaluate.mjs';
 
 export async function stateStr(cdp, sid, action, filePath) {
@@ -35,7 +35,8 @@ async function saveState(cdp, sid, filePath) {
 
 async function loadState(cdp, sid, filePath) {
   if (!filePath) throw new Error('State file required.');
-  const state = JSON.parse(readFileSync(filePath, 'utf8'));
+  const statePath = resolveChromexPath(filePath);
+  const state = JSON.parse(readFileSync(statePath, 'utf8'));
   const currentOrigin = await evalStr(cdp, sid, 'window.location.origin');
   await cdp.send('Network.enable', {}, sid);
   let cookiesSet = 0;
@@ -59,7 +60,7 @@ async function loadState(cdp, sid, filePath) {
     localStorageSet += entries.length;
   }
   return {
-    text: `Storage state loaded from ${filePath} (${cookiesSet} cookies, ${localStorageSet} localStorage entries, ${ignoredOrigins} ignored origins).`,
+    text: `Storage state loaded from ${statePath} (${cookiesSet} cookies, ${localStorageSet} localStorage entries, ${ignoredOrigins} ignored origins).`,
     data: { cookies: cookiesSet, localStorage: localStorageSet, ignoredOrigins },
     artifacts: [],
   };

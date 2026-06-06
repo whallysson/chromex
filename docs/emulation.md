@@ -26,15 +26,15 @@ chromex emulate <target> <device-name>
 ```bash
 # Test mobile layout
 chromex emulate <target> iphone-14
-chromex shot <target> /tmp/mobile.png
+chromex shot <target> ~/.chromex/screenshots/mobile.png
 
 # Test tablet layout
 chromex emulate <target> ipad-pro
-chromex shot <target> /tmp/tablet.png
+chromex shot <target> ~/.chromex/screenshots/tablet.png
 
 # Test large desktop
 chromex emulate <target> desktop-4k
-chromex shot <target> /tmp/4k.png
+chromex shot <target> ~/.chromex/screenshots/4k.png
 ```
 
 **Output:**
@@ -70,19 +70,19 @@ chromex waitfor $TARGET "main"
 
 # Mobile
 chromex emulate $TARGET iphone-14
-chromex shot $TARGET /tmp/responsive-mobile.png
+chromex shot $TARGET ~/.chromex/screenshots/responsive-mobile.png
 
 # Tablet
 chromex emulate $TARGET ipad-pro
-chromex shot $TARGET /tmp/responsive-tablet.png
+chromex shot $TARGET ~/.chromex/screenshots/responsive-tablet.png
 
 # Desktop
 chromex emulate $TARGET desktop-1080p
-chromex shot $TARGET /tmp/responsive-desktop.png
+chromex shot $TARGET ~/.chromex/screenshots/responsive-desktop.png
 
 # 4K
 chromex emulate $TARGET desktop-4k
-chromex shot $TARGET /tmp/responsive-4k.png
+chromex shot $TARGET ~/.chromex/screenshots/responsive-4k.png
 
 # Reset
 chromex emulate $TARGET reset
@@ -169,7 +169,7 @@ chromex emulate $TARGET iphone-14
 
 # Navigate and screenshot
 chromex nav $TARGET "https://example.com"
-chromex shot $TARGET /tmp/tokyo-mobile.png
+chromex shot $TARGET ~/.chromex/screenshots/tokyo-mobile.png
 
 # Reset everything
 chromex geo $TARGET reset

@@ -26,7 +26,7 @@ chromex throttle <target> reset
 # Test loading states under slow network
 chromex throttle <target> slow-3g
 chromex nav <target> "https://example.com"
-chromex shot <target> /tmp/slow-loading.png
+chromex shot <target> ~/.chromex/screenshots/slow-loading.png
 chromex throttle <target> reset
 
 # Test offline behavior
@@ -112,8 +112,8 @@ chromex click <target> "a.products"
 chromex waitfor <target> ".product-list"
 
 # Stop and save
-chromex har <target> stop /tmp/session.har
-# Output: HAR saved to /tmp/session.har (42 entries).
+chromex har <target> stop ~/.chromex/har/session.har
+# Output: HAR saved to ~/.chromex/har/session.har (42 entries).
 ```
 
 ### What's Captured
@@ -132,13 +132,13 @@ chromex har <target> start
 chromex form <target> '{"#email":"user@test.com","#password":"secret"}'
 chromex click <target> "button[type=submit]"
 chromex waitfor <target> ".dashboard"
-chromex har <target> stop /tmp/login-flow.har
+chromex har <target> stop ~/.chromex/har/login-flow.har
 
 # Analyze third-party requests
 chromex har <target> start
 chromex nav <target> "https://example.com"
 chromex wait <target> networkidle
-chromex har <target> stop /tmp/third-party-audit.har
+chromex har <target> stop ~/.chromex/har/third-party-audit.har
 
 # View HAR files in:
 # - Chrome DevTools > Network tab > Import
@@ -176,7 +176,7 @@ chromex nav $TARGET "https://app.example.com/products"
 chromex waitfor $TARGET ".product-card"
 
 # Screenshot the mocked state
-chromex shot $TARGET /tmp/mocked-products.png
+chromex shot $TARGET ~/.chromex/screenshots/mocked-products.png
 
 # Clean up
 chromex intercept $TARGET off

@@ -2,6 +2,7 @@
 // Tracks command counts, timing, errors, and session timeline
 
 import { writeFileSync } from 'fs';
+import { resolveArtifactPath } from '../artifacts.mjs';
 import { emptyState } from '../output.mjs';
 
 export class SessionStats {
@@ -66,6 +67,7 @@ export function statsStr(stats, full = false, exportPath = null) {
 
   // Export to file
   if (exportPath) {
+    const resolvedExportPath = resolveArtifactPath(exportPath, 'stats');
     const data = {
       sessionStart: new Date(stats.startTime).toISOString(),
       uptime: parseInt(uptime),
@@ -74,9 +76,9 @@ export function statsStr(stats, full = false, exportPath = null) {
       commands: Object.fromEntries(stats.commands),
       timeline: stats.timeline,
     };
-    writeFileSync(exportPath, JSON.stringify(data, null, 2));
+    writeFileSync(resolvedExportPath, JSON.stringify(data, null, 2));
     lines.push('');
-    lines.push(`Exported to: ${exportPath}`);
+    lines.push(`Exported to: ${resolvedExportPath}`);
   }
 
   return lines.join('\n');

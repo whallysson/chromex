@@ -167,7 +167,7 @@ chromex click 6BE8 @e3
 # 5. Inspect browser state.
 chromex console 6BE8 list
 chromex net 6BE8
-chromex shot 6BE8 /tmp/page.png
+chromex shot 6BE8
 chromex app 6BE8
 ```
 
@@ -179,7 +179,7 @@ For repeatable agent workflows, use named sessions instead of carrying target ID
 chromex -s auth open https://github.com/login
 chromex -s auth snap --refs
 chromex -s auth fill @e1 "user@example.com"
-chromex -s auth state save .chromex/storage/auth.json
+chromex -s auth state save ~/.chromex/storage/auth.json
 chromex sessions
 ```
 
@@ -206,7 +206,7 @@ chromex wait 6BE8 networkidle
 chromex snap 6BE8 --query=error
 chromex --raw eval 6BE8 "document.title"
 chromex list --json
-chromex snap 6BE8 --filename=.chromex/snapshots/login.yml --boxes
+chromex snap 6BE8 --filename=~/.chromex/snapshots/login.yml --boxes
 chromex locator 6BE8 @e4 --format=chromex-test
 chromex click 6BE8 @e4 --code=chromex-test
 ```
@@ -315,10 +315,10 @@ chromex stop
 ```bash
 chromex snap <target> --refs
 chromex snap <target> --query=login
-chromex snap <target> --filename=.chromex/snapshots/login.yml --boxes
+chromex snap <target> --filename=~/.chromex/snapshots/login.yml --boxes
 chromex html <target> "#main"
-chromex shot <target> /tmp/page.png
-chromex shot <target> /tmp/full.png --full
+chromex shot <target>
+chromex shot <target> ~/.chromex/screenshots/full.png --full
 chromex shot <target> @e5
 chromex console <target> list
 chromex net <target>
@@ -374,8 +374,8 @@ chromex cookies <target> set '{"name":"token","value":"abc"}'
 chromex storage <target> local
 chromex storage <target> session
 chromex storage <target> usage
-chromex state <target> save .chromex/storage/auth.json
-chromex state <target> load .chromex/storage/auth.json
+chromex state <target> save ~/.chromex/storage/auth.json
+chromex state <target> load ~/.chromex/storage/auth.json
 chromex app <target> summary
 chromex sw <target>
 chromex cache <target> list
@@ -383,7 +383,7 @@ chromex cache <target> entries <cacheId> --query=/api
 chromex idb <target> list
 chromex idb <target> schema <databaseName>
 chromex idb <target> rows <databaseName> <objectStoreName> --limit=20
-chromex pdf <target> /tmp/page.pdf
+chromex pdf <target>
 ```
 
 ### Network, Emulation, and Diagnostics
@@ -396,7 +396,7 @@ chromex intercept <target> mock "/api/slow" --delay=750 --status=503 --body='una
 chromex intercept <target> block "*.tracker.*" --abort=blockedbyclient
 chromex intercept <target> on --remove-header=authorization
 chromex har <target> start
-chromex har <target> stop /tmp/trace.har
+chromex har <target> stop ~/.chromex/har/trace.har
 chromex emulate <target> iphone-15-pro
 chromex resize <target> 1280 720
 chromex geo <target> -23.55 -46.63
@@ -412,10 +412,10 @@ chromex stats <target> --full
 chromex eval <target> "document.title"
 chromex evalraw <target> "Page.getLayoutMetrics"
 chromex inject <target> "window.DEBUG=true"
-chromex download <target> allow /tmp/downloads
+chromex download <target> allow ~/.chromex/downloads
 chromex coverage <target> start
 chromex trace <target> start
-chromex heap <target> snapshot /tmp/heap.heapsnapshot
+chromex heap <target> snapshot ~/.chromex/heap/heap.heapsnapshot
 chromex webauthn <target> enable
 ```
 
@@ -480,12 +480,12 @@ Chromex keeps plain text as the default output, but also supports stable modes f
 ```bash
 chromex --raw eval <target> "document.title"
 chromex list --json
-chromex snap <target> --filename=.chromex/snapshots/home.yml --boxes
+chromex snap <target> --filename=~/.chromex/snapshots/home.yml --boxes
 ```
 
 `--raw` prints only the primary command output and suppresses hints and auto-snapshot noise. `--json` returns a stable envelope with `ok`, `command`, `target`, `text`, `data`, `artifacts`, and `error`.
 
-Generated artifacts are written under `~/.chromex/artifacts/<workspace>/` by default. If you pass an explicit `--filename` or state file path, Chromex writes exactly where you point it. Set `CHROMEX_ARTIFACT_ROOT` to override the default artifact root for CI or tests.
+Generated artifacts are written under `~/.chromex/artifacts/<workspace>/` by default. Paths in the Chromex namespace, such as `.chromex/storage/auth.json` or `~/.chromex/storage/auth.json`, resolve to `~/.chromex/...`. Other explicit absolute or relative file paths are respected as provided. Set `CHROMEX_ARTIFACT_ROOT` to override the default artifact root for CI or tests.
 
 ### Named Sessions
 
@@ -513,8 +513,8 @@ Named sessions keep a private storage-state file under `~/.chromex/session-data/
 Storage state captures cookies plus localStorage for the current origin:
 
 ```bash
-chromex state <target> save .chromex/storage/auth.json
-chromex state <target> load .chromex/storage/auth.json
+chromex state <target> save ~/.chromex/storage/auth.json
+chromex state <target> load ~/.chromex/storage/auth.json
 ```
 
 Refs can also be converted into reusable locator output or starter action code:

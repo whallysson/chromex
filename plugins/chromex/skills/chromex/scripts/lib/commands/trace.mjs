@@ -1,6 +1,7 @@
 // Performance tracing via Tracing domain
 
 import { writeFileSync } from 'fs';
+import { resolveArtifactPath, timestamp } from '../artifacts.mjs';
 
 let tracing = false;
 const chunks = [];
@@ -38,7 +39,7 @@ export async function traceStr(cdp, sid, action, fileOrCategories) {
         await cdp.waitForEvent('Tracing.tracingComplete', 30000).promise;
       } catch { /* timeout ok, já temos os chunks */ }
 
-      const out = fileOrCategories || '/tmp/chromex-trace.json';
+      const out = resolveArtifactPath(fileOrCategories || null, 'traces', `trace-${timestamp()}.json`);
       writeFileSync(out, JSON.stringify(chunks));
       const count = chunks.length;
       chunks.length = 0;

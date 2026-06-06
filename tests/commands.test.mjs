@@ -3,19 +3,26 @@
 
 import { describe, it, expect } from 'vitest';
 import { existsSync, mkdtempSync, readFileSync, rmSync, unlinkSync } from 'fs';
-import { tmpdir } from 'os';
-import { join } from 'path';
+import { homedir, tmpdir } from 'os';
+import { join, resolve } from 'path';
 import { parseKeyCombo, pressKeyStr } from '../plugins/chromex/skills/chromex/scripts/lib/commands/keyboard.mjs';
 import { SessionStats, statsStr } from '../plugins/chromex/skills/chromex/scripts/lib/commands/stats.mjs';
 import { netListStr, netDetailStr } from '../plugins/chromex/skills/chromex/scripts/lib/commands/network.mjs';
 import { consoleListStr, consoleDetailStr } from '../plugins/chromex/skills/chromex/scripts/lib/commands/console.mjs';
 import { appStr, cacheStr, clearSiteDataStr, idbStr, serviceWorkersStr, storageUsageStr } from '../plugins/chromex/skills/chromex/scripts/lib/commands/app.mjs';
 import { stateStr } from '../plugins/chromex/skills/chromex/scripts/lib/commands/state.mjs';
+import { shotStr } from '../plugins/chromex/skills/chromex/scripts/lib/commands/screenshot.mjs';
+import { pdfStr } from '../plugins/chromex/skills/chromex/scripts/lib/commands/pdf.mjs';
+import { harStr } from '../plugins/chromex/skills/chromex/scripts/lib/commands/har.mjs';
+import { traceStr } from '../plugins/chromex/skills/chromex/scripts/lib/commands/trace.mjs';
+import { heapStr } from '../plugins/chromex/skills/chromex/scripts/lib/commands/heap.mjs';
+import { downloadStr } from '../plugins/chromex/skills/chromex/scripts/lib/commands/download.mjs';
 import { buildLocator } from '../plugins/chromex/skills/chromex/scripts/lib/commands/locator.mjs';
 import { interceptStr } from '../plugins/chromex/skills/chromex/scripts/lib/commands/intercept.mjs';
 import { showStr } from '../plugins/chromex/skills/chromex/scripts/lib/commands/show.mjs';
 import { evidenceStr, recordEvidenceAction } from '../plugins/chromex/skills/chromex/scripts/lib/commands/evidence.mjs';
 import { sessionStatePath } from '../plugins/chromex/skills/chromex/scripts/lib/sessions.mjs';
+import { resolveChromexPath, workspaceArtifactRoot } from '../plugins/chromex/skills/chromex/scripts/lib/artifacts.mjs';
 
 // Mock CDP client that records sent commands
 function mockCdp() {
@@ -28,6 +35,138 @@ function mockCdp() {
     },
   };
 }
+
+function artifactCdp() {
+  const sent = [];
+  const handlers = new Map();
+  return {
+    sent,
+    onEvent(method, handler) {
+      handlers.set(method, handler);
+      return () => handlers.delete(method);
+    },
+    waitForEvent() {
+      return { promise: Promise.resolve({}) };
+    },
+    send(method, params, sid) {
+      sent.push({ method, params, sid });
+      if (method === 'Page.getLayoutMetrics') {
+        return Promise.resolve({
+          visualViewport: { clientWidth: 1600 },
+          cssVisualViewport: { clientWidth: 800 },
+        });
+      }
+      if (method === 'Page.captureScreenshot') return Promise.resolve({ data: Buffer.from('screenshot').toString('base64') });
+      if (method === 'Page.printToPDF') return Promise.resolve({ data: Buffer.from('pdf').toString('base64') });
+      if (method === 'HeapProfiler.takeHeapSnapshot') {
+        handlers.get('HeapProfiler.addHeapSnapshotChunk')?.({ chunk: 'heap' });
+        return Promise.resolve({});
+      }
+      return Promise.resolve({});
+    },
+  };
+}
+
+async function withArtifactRoot(prefix, callback) {
+  const dir = mkdtempSync(join(tmpdir(), prefix));
+  const previousArtifactRoot = process.env.CHROMEX_ARTIFACT_ROOT;
+  process.env.CHROMEX_ARTIFACT_ROOT = join(dir, 'artifacts');
+
+  try {
+    return await callback(dir);
+  } finally {
+    if (previousArtifactRoot === undefined) delete process.env.CHROMEX_ARTIFACT_ROOT;
+    else process.env.CHROMEX_ARTIFACT_ROOT = previousArtifactRoot;
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+describe('Chromex path resolution', () => {
+  it('keeps default artifacts under Chromex home', () => {
+    const previousArtifactRoot = process.env.CHROMEX_ARTIFACT_ROOT;
+
+    try {
+      delete process.env.CHROMEX_ARTIFACT_ROOT;
+      expect(workspaceArtifactRoot()).toContain(join(homedir(), '.chromex', 'artifacts'));
+    } finally {
+      if (previousArtifactRoot === undefined) delete process.env.CHROMEX_ARTIFACT_ROOT;
+      else process.env.CHROMEX_ARTIFACT_ROOT = previousArtifactRoot;
+    }
+  });
+
+  it('maps the Chromex namespace to the user home directory', () => {
+    expect(resolveChromexPath('.chromex/storage/auth.json')).toBe(join(homedir(), '.chromex', 'storage', 'auth.json'));
+    expect(resolveChromexPath('./.chromex/storage/auth.json')).toBe(join(homedir(), '.chromex', 'storage', 'auth.json'));
+    expect(resolveChromexPath('~/.chromex/storage/auth.json')).toBe(join(homedir(), '.chromex', 'storage', 'auth.json'));
+  });
+
+  it('keeps normal relative paths relative to the current workspace', () => {
+    expect(resolveChromexPath('reports/auth.json')).toBe(resolve(process.cwd(), 'reports', 'auth.json'));
+  });
+});
+
+describe('Default file artifacts', () => {
+  it('writes screenshots under the artifact root by default', async () => {
+    await withArtifactRoot('chromex-shot-', async (dir) => {
+      const output = await shotStr(artifactCdp(), 'sid1', null, false, { defaultScreenshotPath: null });
+
+      expect(output).toContain(join(dir, 'artifacts', 'screenshots'));
+      expect(output).not.toContain('/tmp/screenshot');
+    });
+  });
+
+  it('writes PDFs under the artifact root by default', async () => {
+    await withArtifactRoot('chromex-pdf-', async (dir) => {
+      const output = await pdfStr(artifactCdp(), 'sid1');
+
+      expect(output).toContain(join(dir, 'artifacts', 'pdf'));
+      expect(output).not.toContain('/tmp/page.pdf');
+    });
+  });
+
+  it('writes HAR files under the artifact root by default', async () => {
+    await withArtifactRoot('chromex-har-', async (dir) => {
+      const cdp = artifactCdp();
+
+      await harStr(cdp, 'sid1', 'start');
+      const output = await harStr(cdp, 'sid1', 'stop');
+
+      expect(output).toContain(join(dir, 'artifacts', 'har'));
+      expect(output).not.toContain('/tmp/chromex.har');
+    });
+  });
+
+  it('writes trace files under the artifact root by default', async () => {
+    await withArtifactRoot('chromex-trace-', async (dir) => {
+      const cdp = artifactCdp();
+
+      await traceStr(cdp, 'sid1', 'start');
+      const output = await traceStr(cdp, 'sid1', 'stop');
+
+      expect(output).toContain(join(dir, 'artifacts', 'traces'));
+      expect(output).not.toContain('/tmp/chromex-trace.json');
+    });
+  });
+
+  it('writes heap snapshots under the artifact root by default', async () => {
+    await withArtifactRoot('chromex-heap-', async (dir) => {
+      const output = await heapStr(artifactCdp(), 'sid1', 'snapshot');
+
+      expect(output).toContain(join(dir, 'artifacts', 'heap'));
+      expect(output).not.toContain('/tmp/chromex-heap.heapsnapshot');
+    });
+  });
+
+  it('uses the artifact root for downloads by default', async () => {
+    await withArtifactRoot('chromex-downloads-', async (dir) => {
+      const cdp = artifactCdp();
+      const output = await downloadStr(cdp, 'sid1', 'allow');
+
+      expect(output).toContain(join(dir, 'artifacts', 'downloads'));
+      expect(cdp.sent.at(-1).params.downloadPath).toBe(join(dir, 'artifacts', 'downloads'));
+    });
+  });
+});
 
 function scriptedCdp(handlers = {}) {
   const sent = [];
@@ -430,6 +569,22 @@ describe('Storage state command', () => {
     expect(saved.origins[0].origin).toBe('https://app.example.test');
     expect(saved.origins[0].localStorage).toEqual([{ name: 'theme', value: 'dark' }]);
     unlinkSync(file);
+  });
+
+  it('maps .chromex state files to the user home directory', async () => {
+    const file = `.chromex/storage/chromex-state-${Date.now()}.json`;
+    const expectedPath = join(homedir(), '.chromex', 'storage', file.split('/').pop());
+    const cdp = stateCdp();
+
+    try {
+      const saved = await stateStr(cdp, 'sid1', 'save', file);
+      const loaded = await stateStr(cdp, 'sid1', 'load', file);
+
+      expect(saved.artifacts[0].path).toBe(expectedPath);
+      expect(loaded.text).toContain(`Storage state loaded from ${expectedPath}`);
+    } finally {
+      if (existsSync(expectedPath)) unlinkSync(expectedPath);
+    }
   });
 
   it('loads matching origin and reports ignored origins', async () => {
@@ -855,6 +1010,21 @@ describe('statsStr', () => {
     expect(data.totalCommands).toBe(1);
     expect(data.commands.snap.count).toBe(1);
     unlinkSync(tmpPath);
+  });
+
+  it('exports JSON under Chromex home for .chromex paths', () => {
+    const stats = new SessionStats();
+    stats.record('snap', [], 1000, 1200, true, null);
+    const fileName = `chromex-test-stats-${Date.now()}.json`;
+    const expectedPath = join(homedir(), '.chromex', 'stats', fileName);
+
+    try {
+      const output = statsStr(stats, false, `.chromex/stats/${fileName}`);
+      expect(output).toContain(`Exported to: ${expectedPath}`);
+      expect(JSON.parse(readFileSync(expectedPath, 'utf8')).totalCommands).toBe(1);
+    } finally {
+      if (existsSync(expectedPath)) unlinkSync(expectedPath);
+    }
   });
 });
 
