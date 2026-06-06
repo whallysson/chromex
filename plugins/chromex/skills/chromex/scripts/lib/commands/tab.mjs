@@ -1,9 +1,14 @@
 // Multi-tab management via Target domain
 
 export async function openTabStr(cdp, url) {
+  const { targetId } = await openTab(cdp, url);
+  return `Opened new tab (targetId: ${targetId.slice(0, 8)}). URL: ${url}`;
+}
+
+export async function openTab(cdp, url) {
   if (!url) throw new Error('URL required');
   const { targetId } = await cdp.send('Target.createTarget', { url });
-  return `Opened new tab (targetId: ${targetId.slice(0, 8)}). URL: ${url}`;
+  return { targetId, url };
 }
 
 export async function closeTabStr(cdp, targetPrefix) {

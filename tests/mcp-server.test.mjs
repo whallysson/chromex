@@ -14,6 +14,7 @@ function mcpSession(messages, timeoutMs = 10000) {
   return new Promise((resolve, reject) => {
     const proc = spawn(process.execPath, [SERVER_PATH], {
       stdio: ['pipe', 'pipe', 'pipe'],
+      env: { ...process.env, CHROMEX_ARTIFACT_ROOT: '/tmp/chromex-mcp-test-artifacts' },
     });
 
     let buf = '';
@@ -70,7 +71,7 @@ describe('MCP Protocol', () => {
     expect(r.result.serverInfo.version).toBe('1.6.0');
   });
 
-  it('tools/list returns 73 tools', async () => {
+  it('tools/list returns 77 tools', async () => {
     const responses = await mcpSession([
       INIT,
       INITIALIZED,
@@ -78,7 +79,7 @@ describe('MCP Protocol', () => {
     ]);
     const r = findById(responses, 1);
     expect(r).toBeDefined();
-    expect(r.result.tools).toHaveLength(73);
+    expect(r.result.tools).toHaveLength(77);
   });
 
   it('noHints is declared on all tools that accept noSnap (P2 regression guard)', async () => {
@@ -213,9 +214,10 @@ describe('Tool Definitions', () => {
     ]);
     tools = findById(responses, 1).result.tools;
 
-    const readOnlyTools = ['chromex_list', 'chromex_doctor', 'chromex_snapshot', 'chromex_html',
+    const readOnlyTools = ['chromex_list', 'chromex_doctor', 'chromex_sessions', 'chromex_show',
+      'chromex_snapshot', 'chromex_html',
       'chromex_screenshot', 'chromex_network', 'chromex_perf', 'chromex_console',
-      'chromex_domsnapshot', 'chromex_waitfor', 'chromex_wait', 'chromex_heap',
+      'chromex_domsnapshot', 'chromex_locator', 'chromex_waitfor', 'chromex_wait', 'chromex_heap',
       'chromex_storage_usage', 'chromex_app_summary', 'chromex_service_workers',
       'chromex_cache_list', 'chromex_cache_entries', 'chromex_cache_body',
       'chromex_indexeddb_list', 'chromex_indexeddb_schema', 'chromex_indexeddb_rows'];
@@ -254,7 +256,7 @@ describe('Tool Definitions', () => {
     ]);
     tools = findById(responses, 1).result.tools;
 
-    const noTarget = ['chromex_list', 'chromex_launch', 'chromex_doctor', 'chromex_incognito', 'chromex_stop'];
+    const noTarget = ['chromex_list', 'chromex_launch', 'chromex_doctor', 'chromex_incognito', 'chromex_stop', 'chromex_sessions', 'chromex_show'];
 
     for (const t of tools) {
       if (noTarget.includes(t.name)) {
@@ -303,6 +305,19 @@ describe('Tool Execution (no browser)', () => {
     const r = findById(responses, 1);
     expect(r.result.isError).toBe(true);
     expect(r.result.content[0].text).toContain('No target matching prefix');
+  });
+
+  it('show returns structured artifact metadata', async () => {
+    const responses = await mcpSession([
+      INIT,
+      INITIALIZED,
+      { jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'chromex_show', arguments: { annotate: true } } },
+    ]);
+    const r = findById(responses, 1);
+
+    expect(r.result.structuredContent).toBeDefined();
+    expect(r.result.structuredContent.artifacts.some(item => item.type === 'dashboard')).toBe(true);
+    expect(r.result.structuredContent.artifacts.some(item => item.type === 'annotations')).toBe(true);
   });
 });
 
@@ -401,17 +416,17 @@ describe('Auto-Snapshot Tools', () => {
 describe('Tool Names', () => {
   const EXPECTED_TOOLS = [
     'chromex_list', 'chromex_launch', 'chromex_doctor', 'chromex_open', 'chromex_close',
-    'chromex_focus', 'chromex_incognito', 'chromex_stop',
+    'chromex_focus', 'chromex_incognito', 'chromex_stop', 'chromex_sessions', 'chromex_show',
     'chromex_snapshot', 'chromex_html', 'chromex_screenshot',
     'chromex_network', 'chromex_perf', 'chromex_console',
-    'chromex_domsnapshot', 'chromex_highlight',
+    'chromex_domsnapshot', 'chromex_highlight', 'chromex_locator',
     'chromex_eval', 'chromex_evalraw',
     'chromex_navigate', 'chromex_waitfor', 'chromex_wait', 'chromex_scroll',
     'chromex_click', 'chromex_clickxy', 'chromex_type', 'chromex_hover',
     'chromex_drag', 'chromex_touch', 'chromex_dialog', 'chromex_press_key', 'chromex_loadall',
     'chromex_fill', 'chromex_clear', 'chromex_select', 'chromex_check',
     'chromex_form', 'chromex_upload',
-    'chromex_cookies', 'chromex_storage', 'chromex_pdf',
+    'chromex_cookies', 'chromex_storage', 'chromex_state', 'chromex_pdf',
     'chromex_storage_usage', 'chromex_storage_clear_site_data',
     'chromex_app_summary', 'chromex_service_workers',
     'chromex_service_worker_update', 'chromex_service_worker_skip_waiting',

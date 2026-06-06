@@ -24,3 +24,6 @@ Thumbs.db
 
 # Claude Code
 CLAUDE.md
+
+# Chromex runtime artifacts
+.chromex/

@@ -43,7 +43,7 @@ function truncate(str, max = MAX_NAME_LENGTH) {
 // Render a single AX node line. Ref assignment is done OUT of this function
 // (via the refMap pre-pass) so that query-filtered renders still produce
 // the same @eN numbering as unfiltered renders.
-function formatNodeLine(node, depth, refNum, isNew = false, isMatch = false) {
+function formatNodeLine(node, depth, refNum, isNew = false, isMatch = false, box = null) {
   const role = node.role?.value || '';
   const name = truncate(node.name?.value ?? '');
   const value = node.value?.value;
@@ -55,6 +55,7 @@ function formatNodeLine(node, depth, refNum, isNew = false, isMatch = false) {
   let line = `${indent}${matchTag}${newTag}${refTag}[${role}]`;
   if (name !== '') line += ` ${name}`;
   if (!(value === '' || value == null)) line += ` = ${JSON.stringify(truncate(String(value)))}`;
+  if (box) line += ` [box=${box.x},${box.y},${box.width},${box.height}]`;
   return line;
 }
 
@@ -161,6 +162,7 @@ async function detectScrollables(cdp, sid) {
 //        against the full tree so incremental diff and @eN stability survive.
 // Returns { text, refMap, fingerprints } -- caller stores fingerprints for next diff.
 export async function snapshotStr(cdp, sid, compact = true, refs = false, previousFingerprints = null, maxDepth = 0, query = null) {
+  const options = arguments[7] || {};
   const { nodes } = await cdp.send('Accessibility.getFullAXTree', {}, sid);
   const nodesById = new Map(nodes.map(node => [node.nodeId, node]));
   const childrenByParent = new Map();
@@ -174,7 +176,20 @@ export async function snapshotStr(cdp, sid, compact = true, refs = false, previo
   const isDiff = previousFingerprints !== null && previousFingerprints.size > 0 && !query;
   const scrollables = await detectScrollables(cdp, sid);
 
-  const roots = nodes.filter(node => !node.parentId || !nodesById.has(node.parentId));
+  let roots = nodes.filter(node => !node.parentId || !nodesById.has(node.parentId));
+  if (options.scopeBackendNodeId) {
+    const scopedRoot = nodes.find(node => node.backendDOMNodeId === options.scopeBackendNodeId);
+    if (!scopedRoot) {
+      return {
+        text: emptyState('snap', 'scoped element not found in accessibility tree'),
+        refMap: new Map(),
+        fingerprints: currentFingerprints,
+      };
+    }
+    roots = [scopedRoot];
+  }
+
+  const boxes = options.boxes ? await collectBoxes(cdp, sid, nodes) : new Map();
 
   // ---- Pre-pass: populate refMap on the FULL tree so @eN stays stable
   // regardless of query filtering.
@@ -287,7 +302,7 @@ export async function snapshotStr(cdp, sid, compact = true, refs = false, previo
     const isMatch = !!(matchedIds && matchedIds.has(node.nodeId));
     const refNum = refs ? nodeIdToRef.get(node.nodeId) ?? null : null;
 
-    lines.push(formatNodeLine(node, depth, refNum, isNew, isMatch));
+    lines.push(formatNodeLine(node, depth, refNum, isNew, isMatch, boxes.get(node.nodeId) || null));
 
     // Depth limiting: at the limit, render as leaf (no children)
     if (maxDepth > 0 && depth >= maxDepth) return;
@@ -320,4 +335,25 @@ export async function snapshotStr(cdp, sid, compact = true, refs = false, previo
   }
 
   return { text, refMap, fingerprints: currentFingerprints };
+}
+
+async function collectBoxes(cdp, sid, nodes) {
+  const boxes = new Map();
+  await cdp.send('DOM.enable', {}, sid).catch(() => {});
+  for (const node of nodes) {
+    if (!node.backendDOMNodeId) continue;
+    try {
+      const { model } = await cdp.send('DOM.getBoxModel', { backendNodeId: node.backendDOMNodeId }, sid);
+      const q = model?.border || model?.content;
+      if (!q) continue;
+      const xs = [q[0], q[2], q[4], q[6]];
+      const ys = [q[1], q[3], q[5], q[7]];
+      const x = Math.round(Math.min(...xs));
+      const y = Math.round(Math.min(...ys));
+      const width = Math.round(Math.max(...xs) - x);
+      const height = Math.round(Math.max(...ys) - y);
+      boxes.set(node.nodeId, { x, y, width, height });
+    } catch {}
+  }
+  return boxes;
 }

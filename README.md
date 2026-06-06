@@ -4,14 +4,14 @@
 [![Node.js 22+](https://img.shields.io/badge/node-%3E%3D22.0.0-brightgreen.svg)](https://nodejs.org/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-Chromex is a zero-dependency Chrome DevTools Protocol toolkit for AI agents. It connects directly to Chrome, Brave, Edge, Chromium, and Vivaldi through CDP, exposing a token-efficient CLI and an optional MCP server with 73 typed tools.
+Chromex is a zero-dependency Chrome DevTools Protocol toolkit for AI agents. It connects directly to Chrome, Brave, Edge, Chromium, and Vivaldi through CDP, exposing a token-efficient CLI and an optional MCP server with 77 typed tools.
 
-Use Chromex when an agent needs to inspect pages, take screenshots, navigate, click, fill forms, read console/network activity, emulate devices, throttle network/CPU, export PDFs, or run browser diagnostics without pulling in Puppeteer or Playwright.
+Use Chromex when an agent needs to inspect pages, take screenshots, navigate, click, fill forms, read console/network activity, emulate devices, throttle network/CPU, export PDFs, or run browser diagnostics without pulling in heavy browser automation runtimes.
 
 ## Why Chromex
 
 - **CLI-first for lower token usage**: terminal commands return compact plain text and avoid MCP tool-schema overhead.
-- **Optional MCP server**: 73 typed tools for Claude Code and other MCP clients when tool discovery, typed parameters, and inline screenshots matter more than token budget.
+- **Optional MCP server**: 77 typed tools for Claude Code and other MCP clients when tool discovery, typed parameters, and inline screenshots matter more than token budget.
 - **No runtime dependencies**: Node.js 22+ built-ins only, including native WebSocket support.
 - **Agent-friendly page model**: accessibility snapshots, `@eN` refs, incremental diffs, query filters, auto-snapshots, and contextual hints.
 - **Persistent per-tab daemons**: one CDP session per tab, held open through an authenticated Unix socket.
@@ -21,13 +21,16 @@ Use Chromex when an agent needs to inspect pages, take screenshots, navigate, cl
 ## What You Can Do Today
 
 - Inspect and automate real logged-in browser sessions, not only fresh headless test contexts.
+- Use `--raw` and `--json` for stable pipes, CI, MCP wrappers, and agent-to-agent integrations.
+- Create named sessions with isolated browser contexts, reusable targets, and local session dashboards.
 - Read page state through compact accessibility snapshots, filtered snapshots, DOM snapshots, HTML, screenshots, and highlighted elements.
 - Act on UI through refs, CSS selectors, coordinates, keyboard input, forms, uploads, drag and drop, touch gestures, dialogs, and load-more loops.
 - Debug production behavior with console history, network request details, response bodies, HAR export, request blocking, API mocking, throttling, and offline mode.
 - Test browser conditions with device presets, viewport resizing, DPR, geolocation, timezone, locale, CPU throttling, incognito contexts, proxies, and custom Chrome flags.
 - Diagnose performance and quality with Core Web Vitals, transfer size, DOM/memory counters, Lighthouse audits, JS/CSS coverage, Chrome traces, and heap snapshots.
-- Validate modern browser flows such as passkey/WebAuthn registration and login, downloads, cookies, storage, PDF export, and isolated profiles.
+- Validate modern browser flows such as passkey/WebAuthn registration and login, downloads, cookies, portable storage state, PDF export, and isolated profiles.
 - Inspect Application panel state from the terminal: origin quota, storage usage breakdown, Cache Storage entries/bodies, IndexedDB schemas/rows, and Service Worker registrations.
+- Turn `@eN` refs into locators and optional `chromex-test` action code.
 
 ## Positioning
 
@@ -36,7 +39,7 @@ Chromex is a direct CDP layer for coding agents. It sits between raw Chrome DevT
 | Alternative | Trade-off | Chromex angle |
 |-------------|-----------|---------------|
 | Raw CDP WebSocket | Maximum browser power, but too verbose for agents. | Compact commands, refs, snapshots, and safety defaults. |
-| Puppeteer or Playwright libraries | Excellent automation frameworks, but they add dependencies and framework-level abstractions. | Zero-runtime-dependency CLI/MCP that talks to your existing Chromium browser. |
+| Heavy browser automation libraries | Excellent automation frameworks, but they add dependencies and framework-level abstractions. | Zero-runtime-dependency CLI/MCP that talks to your existing Chromium browser. |
 | Browser MCP only | Easy tool discovery, but tool schemas and structured responses add token cost. | CLI-first for cheap agent loops, MCP when typed tools are worth the overhead. |
 | Manual DevTools | Great for humans, not scriptable enough for agents. | DevTools-grade inspection exposed as terminal and MCP commands. |
 
@@ -48,7 +51,7 @@ Chromex is a direct CDP layer for coding agents. It sits between raw Chrome DevT
 
 ## Zero-Dependency Boundary
 
-The core runtime uses only Node.js built-in modules. Chromex does not install Puppeteer, Playwright, Selenium, browser drivers, telemetry SDKs, update checkers, or bundled browsers.
+The core runtime uses only Node.js built-in modules. Chromex does not install heavy browser automation runtimes, Selenium, browser drivers, telemetry SDKs, update checkers, or bundled browsers.
 
 The only exception is the optional `audit` command: it shells out to Lighthouse with `npx --yes lighthouse` when you explicitly run an audit. All other CLI and MCP commands run through Chromex's own CDP client.
 
@@ -169,6 +172,16 @@ chromex app 6BE8
 
 `<target>` is a unique prefix of the tab target ID returned by `chromex list`. If a prefix is ambiguous, Chromex rejects it and asks for more characters.
 
+For repeatable agent workflows, use named sessions instead of carrying target IDs manually:
+
+```bash
+chromex -s auth open https://github.com/login
+chromex -s auth snap --refs
+chromex -s auth fill @e1 "user@example.com"
+chromex -s auth state save .chromex/storage/auth.json
+chromex sessions
+```
+
 ## Token-Efficient Agent Workflow
 
 Chromex is optimized for agents that need to act on browser state without wasting context.
@@ -180,6 +193,8 @@ Chromex is optimized for agents that need to act on browser state without wastin
 5. Let auto-snapshot show post-action state after interactive commands.
 6. Add `--no-snap` only for fast scripted batches where you do not need immediate page state.
 7. Add `--no-hints` when another program parses output strictly.
+8. Use `--raw` for pipes and `--json` when another tool needs the stable envelope.
+9. Save large snapshots with `--filename` when they are better as artifacts than inline text.
 
 Examples:
 
@@ -188,6 +203,11 @@ chromex snap 6BE8 --query=login --refs
 chromex click 6BE8 @e4
 chromex wait 6BE8 networkidle
 chromex snap 6BE8 --query=error
+chromex --raw eval 6BE8 "document.title"
+chromex list --json
+chromex snap 6BE8 --filename=.chromex/snapshots/login.yml --boxes
+chromex locator 6BE8 @e4 --format=chromex-test
+chromex click 6BE8 @e4 --code=chromex-test
 ```
 
 ## MCP Server
@@ -216,7 +236,9 @@ claude mcp add chromex npx chromex-mcp@latest
 claude mcp add chromex bunx chromex-mcp@latest
 ```
 
-After setup, the MCP client can call tools such as `chromex_list`, `chromex_snapshot`, `chromex_click`, `chromex_fill`, `chromex_screenshot`, `chromex_console`, `chromex_network`, `chromex_app_summary`, `chromex_cache_entries`, and `chromex_indexeddb_rows`.
+After setup, the MCP client can call tools such as `chromex_list`, `chromex_snapshot`, `chromex_click`, `chromex_fill`, `chromex_screenshot`, `chromex_console`, `chromex_network`, `chromex_app_summary`, `chromex_cache_entries`, `chromex_indexeddb_rows`, `chromex_sessions`, `chromex_show`, `chromex_locator`, and `chromex_state`.
+
+Tools that produce machine-readable data or artifacts also include MCP `structuredContent`, so agents can read paths and metadata without parsing the human text block.
 
 ### Claude Code Auto-Approve
 
@@ -272,6 +294,10 @@ claude mcp remove chromex
 ```bash
 chromex list
 chromex open "https://example.com"
+chromex -s auth open "https://example.com/login"
+chromex -s auth snap --refs
+chromex sessions
+chromex show --annotate
 chromex close <target>
 chromex focus <target>
 chromex launch --url https://example.com
@@ -288,6 +314,7 @@ chromex stop
 ```bash
 chromex snap <target> --refs
 chromex snap <target> --query=login
+chromex snap <target> --filename=.chromex/snapshots/login.yml --boxes
 chromex html <target> "#main"
 chromex shot <target> /tmp/page.png
 chromex shot <target> /tmp/full.png --full
@@ -317,6 +344,8 @@ chromex clickxy <target> 100 200
 chromex key <target> Enter
 chromex type <target> "hello world"
 chromex hover <target> @e12
+chromex locator <target> @e12 --format=chromex-test
+chromex click <target> @e12 --code=chromex-test
 chromex drag <target> "#source" "#dest"
 chromex dialog <target> accept
 ```
@@ -340,6 +369,8 @@ chromex cookies <target> set '{"name":"token","value":"abc"}'
 chromex storage <target> local
 chromex storage <target> session
 chromex storage <target> usage
+chromex state <target> save .chromex/storage/auth.json
+chromex state <target> load .chromex/storage/auth.json
 chromex app <target> summary
 chromex sw <target>
 chromex cache <target> list
@@ -355,6 +386,10 @@ chromex pdf <target> /tmp/page.pdf
 ```bash
 chromex throttle <target> 3g
 chromex intercept <target> block "*.analytics.*"
+chromex intercept <target> mock "/api/user" --status=200 --content-type=application/json --body='{"ok":true}'
+chromex intercept <target> mock "/api/slow" --delay=750 --status=503 --body='unavailable'
+chromex intercept <target> block "*.tracker.*" --abort=blockedbyclient
+chromex intercept <target> on --remove-header=authorization
 chromex har <target> start
 chromex har <target> stop /tmp/trace.har
 chromex emulate <target> iphone-15-pro
@@ -433,9 +468,62 @@ help[3]:
 
 Disable hints with `--no-hints`.
 
+### Stable Output and Artifacts
+
+Chromex keeps plain text as the default output, but also supports stable modes for scripts:
+
+```bash
+chromex --raw eval <target> "document.title"
+chromex list --json
+chromex snap <target> --filename=.chromex/snapshots/home.yml --boxes
+```
+
+`--raw` prints only the primary command output and suppresses hints and auto-snapshot noise. `--json` returns a stable envelope with `ok`, `command`, `target`, `text`, `data`, `artifacts`, and `error`.
+
+Generated artifacts are written under `~/.chromex/artifacts/<workspace>/` by default. If you pass an explicit `--filename` or state file path, Chromex writes exactly where you point it. Set `CHROMEX_ARTIFACT_ROOT` to override the default artifact root for CI or tests.
+
+### Named Sessions
+
+Named sessions let agents reuse isolated browser contexts without carrying target IDs:
+
+```bash
+chromex -s auth open https://example.com/login
+chromex -s auth snap --refs
+chromex -s auth click @e3
+chromex sessions
+chromex show --annotate
+chromex close-all
+chromex delete-data
+```
+
+`CHROMEX_SESSION=auth` can replace `-s auth` for shell scripts.
+`chromex show` opens the generated dashboard in the default browser during normal CLI usage; set `CHROMEX_NO_OPEN=1` or use `--json`/`--raw` to only write the artifact.
+
+Named sessions keep a private storage-state file under `~/.chromex/session-data/<name>/storage-state.json`. Chromex restores it when the named session is reopened and refreshes it after state-changing session commands.
+
+`chromex show --annotate` generates a local dashboard with screenshot previews, region/point marking, per-mark notes, and JSON export. Browsers with File System Access support can save the exported pack directly; other browsers download the JSON file.
+
+### Storage State and Locators
+
+Storage state captures cookies plus localStorage for the current origin:
+
+```bash
+chromex state <target> save .chromex/storage/auth.json
+chromex state <target> load .chromex/storage/auth.json
+```
+
+Refs can also be converted into reusable locator output or starter action code:
+
+```bash
+chromex locator <target> @e5 --format=chromex-test
+chromex locator <target> @e5 --format=css
+chromex locator <target> @e5 --format=testing-library
+chromex fill <target> @e1 "user@example.com" --code=chromex-test
+```
+
 ## Application State Suite
 
-Chromex exposes browser Application panel state without Puppeteer, Playwright, or extra packages. This is useful for debugging PWAs, offline behavior, stale caches, local database migrations, authentication state, and quota issues from the same logged-in browser session an agent is already using.
+Chromex exposes browser Application panel state without heavy browser automation runtimes or extra packages. This is useful for debugging PWAs, offline behavior, stale caches, local database migrations, authentication state, and quota issues from the same logged-in browser session an agent is already using.
 
 ```bash
 # One-line overview for the current origin
@@ -530,6 +618,14 @@ bun run test
 ```
 
 The runtime package has no dependencies. Development dependencies are used only for tests and token benchmarks.
+
+Run the browser-backed smoke flow explicitly when validating a release candidate:
+
+```bash
+bun run test:smoke
+```
+
+The smoke script launches a temporary headless Chromium profile through `CDP_PORT_FILE`, exercises named sessions, snapshots, locators, storage state, annotation dashboard artifacts, and then stops the launched process.
 
 To reproduce the token-format comparison:
 

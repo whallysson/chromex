@@ -50,6 +50,9 @@ import { highlightStr } from './commands/highlight.mjs';
 import { auditStr } from './commands/audit.mjs';
 import { SessionStats, statsStr } from './commands/stats.mjs';
 import { appStr, cacheStr, idbStr, serviceWorkersStr } from './commands/app.mjs';
+import { stateStr } from './commands/state.mjs';
+import { actionCodeStr, locatorStr } from './commands/locator.mjs';
+import { writeTextArtifact } from './artifacts.mjs';
 import { generateHints, renderHints, isRefMapFresh } from './hints.mjs';
 import { sleep } from './utils.mjs';
 
@@ -60,6 +63,17 @@ const AUTO_SNAP_CMDS = new Set([
   'click', 'clickxy', 'type', 'fill', 'clear', 'select', 'check', 'form',
   'nav', 'navigate', 'dialog', 'loadall', 'drag', 'touch', 'upload', 'key',
 ]);
+
+function asCommandResult(value) {
+  if (value && typeof value === 'object' && ('text' in value || 'data' in value || 'artifacts' in value)) {
+    return {
+      text: value.text ?? '',
+      data: value.data ?? null,
+      artifacts: value.artifacts || [],
+    };
+  }
+  return { text: value ?? '', data: null, artifacts: [] };
+}
 
 export function getOrCreateToken(config) {
   if (!config.socketAuth) return null;
@@ -186,19 +200,24 @@ export async function runDaemon(targetId, config) {
       // command args (e.g. fill would type "--no-snap" into the input field).
       const noSnap = args.includes('--no-snap');
       const noHints = args.includes('--no-hints');
-      if (noSnap || noHints) args = args.filter(a => a !== '--no-snap' && a !== '--no-hints');
+      const codeArg = args.find(a => a.startsWith('--code='));
+      const codeFormat = codeArg ? codeArg.slice('--code='.length) : null;
+      if (noSnap || noHints || codeArg) args = args.filter(a => a !== '--no-snap' && a !== '--no-hints' && a !== codeArg);
 
       let result;
+      let actionCode = null;
       let isRefCmd = false;
 
       // Ref-based dispatch: click @e5, fill @e3 "value", hover @e12
-      if (args[0] && parseRef(args[0]) !== null) {
+      if (args[0] && parseRef(args[0]) !== null && ['click', 'fill', 'hover'].includes(cmd)) {
         isRefCmd = true;
         const refNum = parseRef(args[0]);
         const dbl = args.includes('--dbl');
         if (cmd === 'click') {
+          if (codeFormat === 'chromex-test') actionCode = await actionCodeStr(cdp, sessionId, currentRefMap, cmd, args[0]);
           result = await clickRefStr(cdp, sessionId, currentRefMap, refNum, dbl);
         } else if (cmd === 'fill') {
+          if (codeFormat === 'chromex-test') actionCode = await actionCodeStr(cdp, sessionId, currentRefMap, cmd, args[0], args.slice(1).join(' '));
           result = await fillRefStr(cdp, sessionId, currentRefMap, refNum, args.slice(1).join(' '));
           lastFilledRef = refNum;
         } else if (cmd === 'hover') {
@@ -227,9 +246,34 @@ export async function runDaemon(targetId, config) {
           const maxDepth = depthArg ? parseInt(depthArg.split('=')[1]) || 0 : 0;
           const queryArg = args.find(a => a.startsWith('--query='));
           const query = queryArg ? queryArg.slice('--query='.length) : null;
+          const filenameArg = args.find(a => a.startsWith('--filename='));
+          const filenameIndex = args.indexOf('--filename');
+          const filename = filenameArg ? filenameArg.slice('--filename='.length) : filenameIndex >= 0 ? args[filenameIndex + 1] : null;
+          const boxes = args.includes('--boxes');
+          const scopeArg = args.find((a, i) => {
+            if (!a || a.startsWith('--')) return false;
+            if (filenameIndex >= 0 && i === filenameIndex + 1) return false;
+            return true;
+          });
+          const options = { boxes };
+          if (scopeArg) {
+            const refNum = parseRef(scopeArg);
+            if (refNum !== null) {
+              const ref = currentRefMap.get(refNum);
+              if (!ref) throw new Error(`Ref @e${refNum} not found. Run "snap --refs" first.`);
+              options.scopeBackendNodeId = ref.backendNodeId;
+            }
+          }
           const prevFp = forceFull ? null : previousFingerprints;
-          const snapResult = await snapshotStr(cdp, sessionId, true, useRefs, prevFp, maxDepth, query);
-          result = snapResult.text;
+          const snapResult = await snapshotStr(cdp, sessionId, true, useRefs, prevFp, maxDepth, query, options);
+          const artifacts = [];
+          let text = snapResult.text;
+          if (filename) {
+            const artifact = writeTextArtifact(filename, snapResult.text, 'snapshots');
+            artifacts.push(artifact);
+            text = `Snapshot saved to ${artifact.path}`;
+          }
+          result = { text, data: { refs: snapResult.refMap.size }, artifacts };
           // Always track fingerprints on the full tree -- this survives query filtering
           // because snapshotStr computes them before applying the filter.
           previousFingerprints = snapResult.fingerprints;
@@ -291,6 +335,7 @@ export async function runDaemon(targetId, config) {
         case 'click': {
           const dbl = args.includes('--dbl');
           const sel = args.filter(a => a !== '--dbl')[0];
+          if (codeFormat === 'chromex-test') actionCode = await actionCodeStr(cdp, sessionId, currentRefMap, cmd, sel);
           result = await clickStr(cdp, sessionId, sel, dbl);
           break;
         }
@@ -314,6 +359,7 @@ export async function runDaemon(targetId, config) {
           break;
         // --- Additional commands ---
         case 'fill':
+          if (codeFormat === 'chromex-test') actionCode = await actionCodeStr(cdp, sessionId, currentRefMap, cmd, args[0], args.slice(1).join(' '));
           result = await fillStr(cdp, sessionId, args[0], args.slice(1).join(' '));
           break;
         case 'clear':
@@ -323,6 +369,7 @@ export async function runDaemon(targetId, config) {
           result = await selectStr(cdp, sessionId, args[0], args.slice(1).join(' '));
           break;
         case 'check':
+          if (codeFormat === 'chromex-test') actionCode = await actionCodeStr(cdp, sessionId, currentRefMap, cmd, args[0]);
           result = await checkStr(cdp, sessionId, args[0], args[1] !== 'false');
           break;
         case 'form':
@@ -351,6 +398,16 @@ export async function runDaemon(targetId, config) {
         case 'storage':
           result = await storageStr(cdp, sessionId, args[0]);
           break;
+        case 'state':
+          result = await stateStr(cdp, sessionId, args[0], args[1]);
+          break;
+        case 'locator': {
+          const formatArg = args.find(a => a.startsWith('--format='));
+          const format = formatArg ? formatArg.slice('--format='.length) : 'chromex-test';
+          const locatorTarget = args.find(a => a && !a.startsWith('--'));
+          result = await locatorStr(cdp, sessionId, currentRefMap, locatorTarget, format);
+          break;
+        }
         case 'app':
           result = await appStr(cdp, sessionId, args[0]);
           break;
@@ -417,7 +474,7 @@ export async function runDaemon(targetId, config) {
           break;
         // --- Tier 2: Game Changers ---
         case 'intercept':
-          result = await interceptStr(cdp, sessionId, args[0], args[1], args.slice(2).join(' ') || undefined);
+          result = await interceptStr(cdp, sessionId, ...args);
           break;
         case 'har':
           result = await harStr(cdp, sessionId, args[0], args[1]);
@@ -483,6 +540,11 @@ export async function runDaemon(targetId, config) {
         }
       }
       audit(cmd, targetId, args, auditResult, config);
+      let commandResult = asCommandResult(result);
+      if (actionCode?.code) {
+        commandResult.text = `${commandResult.text}\n\ncode:\n${actionCode.code}`;
+        commandResult.data = { ...(commandResult.data || {}), code: actionCode.code, locator: actionCode.locator.value };
+      }
 
       // Auto-snapshot: append incremental snapshot with refs after DOM-modifying actions.
       // This lets the AI agent see the resulting page state in a single round-trip.
@@ -502,7 +564,7 @@ export async function runDaemon(targetId, config) {
           // Same rule as explicit snap --refs: fresh empty ref maps must replace
           // stale state, otherwise hints can suggest dead @eN from a prior screen.
           currentRefMap = snapResult.refMap;
-          result = (result ?? '') + '\n\n' + snapResult.text;
+          commandResult.text = (commandResult.text ?? '') + '\n\n' + snapResult.text;
         } catch (e) { process.stderr.write(`[auto-snap] ${e.message}\n`); }
       }
 
@@ -522,12 +584,17 @@ export async function runDaemon(targetId, config) {
             hasPage: true,
           });
           const hintsText = renderHints(hints);
-          if (hintsText) result = (result ?? '') + '\n\n' + hintsText;
+          if (hintsText) commandResult.text = (commandResult.text ?? '') + '\n\n' + hintsText;
         } catch (e) { process.stderr.write(`[hints] ${e.message}\n`); }
       }
 
       sessionStats.record(cmd, args, startMs, Date.now(), true, null);
-      return { ok: true, result: result ?? '' };
+      return {
+        ok: true,
+        result: commandResult.text ?? '',
+        data: commandResult.data ?? null,
+        artifacts: commandResult.artifacts || [],
+      };
     } catch (e) {
       auditResult.ok = false;
       audit(cmd, targetId, args, auditResult, config);

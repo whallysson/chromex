@@ -6,7 +6,7 @@ version: 1.6.0
 
 # Chromex -- Chrome DevTools Protocol CLI
 
-Zero-dependency CDP CLI for AI agents. Connects to Chrome/Brave/Edge via WebSocket. Per-tab persistent daemons, security hardened, 73 MCP tools.
+Zero-dependency CDP CLI for AI agents. Connects to Chrome/Brave/Edge via WebSocket. Per-tab persistent daemons, security hardened, 77 MCP tools.
 
 ## Prerequisites
 
@@ -40,6 +40,9 @@ The `<target>` is a **unique** targetId prefix from `list`; copy the full prefix
 ```bash
 chromex.mjs list                                    # list open pages
 chromex.mjs open    <url>                           # open new tab
+chromex.mjs -s auth open <url>                      # open named isolated session
+chromex.mjs sessions                                # list named sessions
+chromex.mjs show [--annotate]                       # open local dashboard artifact
 chromex.mjs close   <target>                        # close tab
 chromex.mjs focus   <target>                        # activate/focus tab
 chromex.mjs launch  [--incognito] [--browser NAME]  # launch browser with debugging
@@ -51,7 +54,22 @@ chromex.mjs launch  --browser-path PATH             # explicit Chromium executab
 chromex.mjs doctor                                  # diagnose CDP connectivity
 chromex.mjs incognito [url]                         # isolated context (no relaunch)
 chromex.mjs stop    [target]                        # stop daemon(s)
+chromex.mjs close-all                               # close named sessions
+chromex.mjs delete-data                             # delete named session data
 ```
+
+Named sessions persist storage state under `~/.chromex/session-data/<name>/storage-state.json` and restore it when reopened.
+
+### Global Output
+
+```bash
+chromex.mjs --raw eval <target> "document.title"    # primary output only
+chromex.mjs list --json                             # stable result envelope
+CHROMEX_SESSION=auth chromex.mjs snap --refs        # default named session
+```
+
+MCP responses that contain command data or artifacts include `structuredContent` alongside the text block.
+Generated artifacts default to `~/.chromex/artifacts/<workspace>/`. Explicit file paths are respected as provided.
 
 ### Inspect
 
@@ -61,6 +79,7 @@ chromex.mjs snap    <target> --refs             # with interactive refs (@e1, @e
 chromex.mjs snap    <target> --refs --full      # force full snapshot (skip diff)
 chromex.mjs snap    <target> --depth=2          # limit tree depth
 chromex.mjs snap    <target> --query=login      # filter to matches + ancestors (refs stay stable)
+chromex.mjs snap    <target> --filename=.chromex/snapshots/page.yml --boxes
 chromex.mjs html    <target> [selector]         # full page or element HTML
 chromex.mjs shot    <target> [file] [--full]    # screenshot (viewport or full page)
 chromex.mjs shot    <target> --format=jpeg --quality=80  # JPEG/WebP with quality
@@ -100,10 +119,14 @@ chromex.mjs scroll  <target> <dir> [amount]     # scroll: up, down, top, bottom,
 ```bash
 chromex.mjs click   <target> <selector|@eN>     # click by selector or ref
 chromex.mjs click   <target> @e5 --dbl          # double-click by ref
+chromex.mjs click   <target> @e5 --code=chromex-test
 chromex.mjs clickxy <target> <x> <y> [--dbl]   # click at CSS pixel coords
 chromex.mjs key     <target> <combo>            # press key: Enter, Tab, Escape, Control+A
 chromex.mjs type    <target> <text>             # type text (works cross-origin)
 chromex.mjs hover   <target> @eN                # hover by ref
+chromex.mjs locator <target> @eN --format=chromex-test
+chromex.mjs locator <target> @eN --format=css
+chromex.mjs locator <target> @eN --format=testing-library
 chromex.mjs drag    <target> <from> <to>        # drag & drop (selectors or coords)
 chromex.mjs touch   <target> <gesture> [args]   # tap, swipe, pinch, longpress
 chromex.mjs dialog  <target> accept|dismiss|auto # handle alert/confirm/prompt
@@ -126,6 +149,8 @@ chromex.mjs upload  <target> <selector> <files> # upload file(s) to input[type=f
 ```bash
 chromex.mjs cookies <target> [list|set|clear]   # cookie management
 chromex.mjs storage <target> local|session|clear|usage|clear-site-data
+chromex.mjs state   <target> save .chromex/storage/auth.json
+chromex.mjs state   <target> load .chromex/storage/auth.json
 chromex.mjs app     <target> summary            # Application state summary
 chromex.mjs sw      <target> [action] [scope]   # Service Workers
 chromex.mjs cache   <target> entries <cacheId> --query=/api
@@ -139,8 +164,20 @@ chromex.mjs pdf     <target> [file]             # export as PDF
 ```bash
 chromex.mjs throttle <target> <preset|reset>    # 3g, slow-3g, 4g, offline, custom
 chromex.mjs intercept <target> <action> [args]  # block, mock, on, off, rules
+chromex.mjs intercept <target> mock "/api/user" --status=200 --content-type=application/json --body='{"ok":true}'
+chromex.mjs intercept <target> mock "/api/slow" --delay=750 --status=503 --body='unavailable'
+chromex.mjs intercept <target> block "*.tracker.*" --abort=blockedbyclient
+chromex.mjs intercept <target> on --remove-header=authorization
 chromex.mjs har     <target> start|stop [file]  # record HTTP traffic as HAR
 ```
+
+### Release Smoke
+
+```bash
+bun run test:smoke
+```
+
+Runs a browser-backed smoke flow for named sessions, snapshot artifacts, locators, storage state, and the annotation dashboard.
 
 ### Emulate
 

@@ -3,6 +3,7 @@
 // Zero dependencies. Node 22+ (built-in WebSocket).
 
 import { writeFileSync, existsSync, readFileSync } from 'fs';
+import { spawn } from 'child_process';
 import { loadConfig } from './lib/config.mjs';
 import { CDP } from './lib/client.mjs';
 import { getWsUrl, getPages, formatPageList } from './lib/browser.mjs';
@@ -11,8 +12,12 @@ import { resolvePrefix, listDaemonSockets } from './lib/utils.mjs';
 import { runDaemon } from './lib/daemon.mjs';
 import { getOrStartTabDaemon, sendCommand, stopDaemons, findAnyDaemonSocket, checkTargetDomain } from './lib/ipc.mjs';
 import { launchBrowser, incognitoContext } from './lib/launcher.mjs';
+import { openTab, openTabStr, closeTabStr, focusTabStr } from './lib/commands/tab.mjs';
+import { deleteSessionData, formatSessions, getSession, listSessions, removeSession, sessionStatePath, setSession } from './lib/sessions.mjs';
+import { showStr } from './lib/commands/show.mjs';
 
 const config = loadConfig();
+let activeOutputOptions = { json: false };
 
 // Commands that require a target tab
 const NEEDS_TARGET = new Set([
@@ -29,15 +34,23 @@ const NEEDS_TARGET = new Set([
   'trace', 'heap', 'webauthn', 'drag', 'touch', 'domsnapshot', 'highlight',
   'hover', 'key', 'resize', 'audit', 'stats',
   // Application state
-  'app', 'sw', 'cache', 'idb',
+  'app', 'sw', 'cache', 'idb', 'state', 'locator',
+]);
+
+const SESSION_PERSIST_COMMANDS = new Set([
+  'nav', 'navigate', 'click', 'clickxy', 'type', 'loadall', 'eval', 'evalraw',
+  'fill', 'clear', 'select', 'check', 'form', 'cookies', 'storage', 'state',
+  'wait', 'dialog', 'upload', 'inject', 'download', 'drag', 'touch', 'key',
 ]);
 
 const USAGE = `chromex - Chrome DevTools Protocol CLI for AI agents
 
-Usage: chromex <command> [args]
+Usage: chromex [--raw] [--json] [-s name] <command> [args]
 
   PAGES
     list                                List open pages (shows unique target prefixes)
+    sessions                            List named Chromex sessions
+    show [--annotate]                   Open local session dashboard artifact
     open    <url>                       Open new tab
     close   <target>                    Close tab
     focus   <target>                    Activate/focus tab
@@ -52,6 +65,8 @@ Usage: chromex <command> [args]
       --insecure                        Ignore certificate errors
       --chrome-arg FLAG                 Pass custom Chrome flag (e.g. --chrome-arg --disable-web-security)
     incognito [url]                     Create isolated browser context (no relaunch)
+    close-all                           Close named Chromex sessions
+    delete-data <session>               Delete Chromex-managed session data
 
   INSPECT
     snap    <target> [options]          Accessibility tree snapshot (compact)
@@ -59,6 +74,10 @@ Usage: chromex <command> [args]
       --full                            Force full snapshot (skip incremental diff)
       --depth=N                         Limit tree depth (nodes at limit render as leaves)
       --query=TEXT                      Filter to nodes matching substring + ancestors
+      --filename=FILE                   Save snapshot as artifact
+      --boxes                           Include bounding boxes when available
+    locator <target> <sel|@eN>          Generate locator for tests
+      --format=chromex-test|css|testing-library
     html    <target> [selector]         Get HTML (full page or CSS selector)
     shot    <target> [file] [options]   Screenshot (viewport, full page, or element)
       --full                            Full page capture
@@ -104,6 +123,7 @@ Usage: chromex <command> [args]
   DATA
     cookies <target> [action] [arg]     Cookies: list, set <json>, clear [domain]
     storage <target> <type>             Storage: local, session, clear, usage, clear-site-data
+    state   <target> save|load [file]   Save/load cookies + localStorage state
     app     <target> [summary]          Application state summary
     sw      <target> [action] [scope]   Service Workers: list, update, skip-waiting, unregister
     cache   <target> [action] [args]    Cache Storage: list, entries <cacheId> --query=/api, body, delete-entry, delete
@@ -113,6 +133,8 @@ Usage: chromex <command> [args]
   NETWORK
     throttle <target> <preset|reset>    Throttle: 3g, slow-3g, 4g, offline, custom, reset
     intercept <target> <action> [args]  Intercept: on, block, mock, off, rules
+      mock supports --status --content-type --header --body --delay
+      block supports --abort; on supports --remove-header
     har     <target> start|stop [file]  Record HTTP traffic as HAR file
 
   EMULATE
@@ -145,6 +167,9 @@ Usage: chromex <command> [args]
 <target> is a unique targetId prefix from "chromex list". Ambiguous prefixes are rejected.
 
 OUTPUT FLAGS
+  --raw       Print only primary command output and suppress hints/auto-snapshot
+  --json      Print stable JSON envelope: ok, command, target, text, data, artifacts, error
+  -s NAME     Use a named Chromex session. Can also use CHROMEX_SESSION
   --no-snap   Skip auto-snapshot after interactive commands
   --no-hints  Suppress contextual help[] suggestions
 
@@ -160,7 +185,10 @@ COORDINATES
 `;
 
 async function main() {
-  const [cmd, ...args] = process.argv.slice(2);
+  const parsed = parseGlobalArgs(process.argv.slice(2));
+  activeOutputOptions = parsed.options;
+  const [cmd, ...args] = parsed.args;
+  const sessionName = parsed.options.sessionName;
 
   // Daemon mode (internal)
   if (cmd === '_daemon') {
@@ -169,7 +197,7 @@ async function main() {
   }
 
   if (!cmd || cmd === 'help' || cmd === '--help' || cmd === '-h') {
-    console.log(USAGE);
+    printEnvelope({ ok: true, command: cmd || 'help', text: USAGE }, parsed.options);
     process.exit(0);
   }
 
@@ -194,8 +222,62 @@ async function main() {
     }
     writeFileSync(config._pagesCachePath, JSON.stringify(pages));
     audit('list', null, [], { ok: true }, config);
-    console.log(formatPageList(pages, config));
+    printEnvelope({
+      ok: true,
+      command: cmd,
+      text: formatPageList(pages, config),
+      data: pages,
+    }, parsed.options);
     setTimeout(() => process.exit(0), 100);
+    return;
+  }
+
+  if (cmd === 'sessions') {
+    const records = listSessions(config);
+    const pages = await getLivePages().catch(() => []);
+    printEnvelope({
+      ok: true,
+      command: cmd,
+      text: formatSessions(records, pages),
+      data: records,
+    }, parsed.options);
+    return;
+  }
+
+  if (cmd === 'show') {
+    const records = listSessions(config);
+    const result = await getShowResult(records, args.includes('--annotate'));
+    const dashboard = result.artifacts?.find(item => item.type === 'dashboard' && item.path.endsWith('/index.html'));
+    if (!parsed.options.json && !parsed.options.raw && dashboard && openDashboard(dashboard.path)) {
+      result.text += '\nDashboard opened in the default browser.';
+    }
+    printEnvelope({ ok: true, command: cmd, text: result.text, data: result.data, artifacts: result.artifacts }, parsed.options);
+    return;
+  }
+
+  if (cmd === 'close-all') {
+    const records = listSessions(config);
+    let stale = false;
+    try {
+      await closeSessionRecords(records);
+    } catch {
+      stale = true;
+      clearSessionRecords(records);
+    }
+    const text = stale
+      ? `Cleared ${records.length} stale session record(s). Browser was unavailable.`
+      : `Closed ${records.length} session(s).`;
+    printEnvelope({ ok: true, command: cmd, text, data: { closed: stale ? 0 : records.length, staleCleared: stale ? records.length : 0 } }, parsed.options);
+    return;
+  }
+
+  if (cmd === 'delete-data') {
+    const name = args[0] || sessionName;
+    if (!name) throw new Error('Session name required.');
+    const record = removeSession(config, name);
+    const dataPath = deleteSessionData(name);
+    if (record) await closeSessionRecords([record], { persist: false }).catch(() => {});
+    printEnvelope({ ok: true, command: cmd, text: `Deleted session data for ${name}: ${dataPath}`, data: { session: name, path: dataPath } }, parsed.options);
     return;
   }
 
@@ -205,14 +287,14 @@ async function main() {
     if (options['chrome-arg']) { options.chromeArgs = [options['chrome-arg']]; delete options['chrome-arg']; }
     if (options['browser-path']) { options.browserPath = options['browser-path']; delete options['browser-path']; }
     const result = await launchBrowser(options);
-    console.log(result);
+    printEnvelope({ ok: true, command: cmd, text: result }, parsed.options);
     return;
   }
 
   // Doctor
   if (cmd === 'doctor') {
     const { doctorStr } = await import('./lib/commands/doctor.mjs');
-    console.log(await doctorStr(config));
+    printEnvelope({ ok: true, command: cmd, text: await doctorStr(config) }, parsed.options);
     return;
   }
 
@@ -221,36 +303,62 @@ async function main() {
     const cdp = new CDP(config.commandTimeout);
     await cdp.connect(getWsUrl());
     const result = await incognitoContext(cdp, args[0]);
-    console.log(result.message);
+    if (sessionName) {
+      setSession(config, sessionName, {
+        targetId: result.targetId,
+        browserContextId: result.browserContextId,
+        url: args[0] || 'about:blank',
+      });
+    }
+    printEnvelope({ ok: true, command: cmd, target: result.targetId, text: result.message, data: result }, parsed.options);
     cdp.close();
     return;
   }
 
   // Tab management (no daemon needed -- direct browser WebSocket)
   if (cmd === 'open' || cmd === 'close' || cmd === 'focus') {
-    const { openTabStr, closeTabStr, focusTabStr } = await import('./lib/commands/tab.mjs');
     const cdp = new CDP(config.commandTimeout);
     await cdp.connect(getWsUrl());
     let result;
     if (cmd === 'open') {
       if (!args[0]) { console.error('Error: URL required'); process.exit(1); }
-      result = await openTabStr(cdp, args[0]);
+      if (sessionName) {
+        const previousSession = getSession(config, sessionName);
+        const statePath = previousSession?.statePath || sessionStatePath(sessionName);
+        const { browserContextId } = await cdp.send('Target.createBrowserContext', { disposeOnDetach: false });
+        const { targetId } = await cdp.send('Target.createTarget', { url: args[0], browserContextId });
+        setSession(config, sessionName, { targetId, browserContextId, url: args[0], statePath });
+        const pages = await getPages(cdp);
+        writeFileSync(config._pagesCachePath, JSON.stringify(pages));
+        result = `Session "${sessionName}" opened (targetId: ${targetId.slice(0, 8)}). URL: ${args[0]}`;
+        if (await restoreSessionState(targetId, statePath).catch(() => false)) {
+          result += `\nSession state restored from ${statePath}`;
+        }
+      } else {
+        result = await openTabStr(cdp, args[0]);
+      }
     } else if (cmd === 'close') {
-      if (!args[0]) { console.error('Error: target prefix required'); process.exit(1); }
-      result = await closeTabStr(cdp, args[0]);
+      const closeTarget = args[0] || (sessionName ? getSession(config, sessionName)?.targetId : null);
+      if (!closeTarget) { console.error('Error: target prefix required'); process.exit(1); }
+      if (sessionName) await persistSessionState(closeTarget, sessionName).catch(() => {});
+      result = await closeTabStr(cdp, closeTarget);
+      if (sessionName) removeSession(config, sessionName);
     } else {
-      if (!args[0]) { console.error('Error: target prefix required'); process.exit(1); }
-      result = await focusTabStr(cdp, args[0]);
+      const focusTarget = args[0] || (sessionName ? getSession(config, sessionName)?.targetId : null);
+      if (!focusTarget) { console.error('Error: target prefix required'); process.exit(1); }
+      result = await focusTabStr(cdp, focusTarget);
     }
-    console.log(result);
+    printEnvelope({ ok: true, command: cmd, text: result }, parsed.options);
     cdp.close();
     return;
   }
 
   // Stop
   if (cmd === 'stop') {
-    await stopDaemons(args[0], config);
-    audit('stop', args[0] || 'all', [], { ok: true }, config);
+    const stopTarget = args[0] || (sessionName ? getSession(config, sessionName)?.targetId : null);
+    await stopDaemons(stopTarget, config);
+    audit('stop', stopTarget || 'all', [], { ok: true }, config);
+    printEnvelope({ ok: true, command: cmd, target: stopTarget, text: stopTarget ? `Stopped daemon ${stopTarget.slice(0, 8)}.` : 'Stopped all daemons.' }, parsed.options);
     return;
   }
 
@@ -261,14 +369,15 @@ async function main() {
     process.exit(1);
   }
 
-  const targetPrefix = args[0];
+  const session = sessionName ? getSession(config, sessionName) : null;
+  const targetPrefix = session ? session.targetId : args[0];
   if (!targetPrefix) {
-    console.error('Error: target ID required. Run "chromex list" first.');
-    process.exit(1);
+    throw new Error(sessionName ? `Session "${sessionName}" has no active target. Run "chromex -s ${sessionName} open <url>" first.` : 'Target ID required. Run "chromex list" first.');
   }
 
   // Resolve prefix -> targetId
   let targetId;
+  if (sessionName) await getLivePages().catch(() => []);
   const daemonTargetIds = listDaemonSockets(config._socketDir).map(d => d.targetId);
   const daemonMatches = daemonTargetIds.filter(id => id.toUpperCase().startsWith(targetPrefix.toUpperCase()));
 
@@ -288,9 +397,10 @@ async function main() {
 
   const conn = await getOrStartTabDaemon(targetId, config);
 
-  const noSnap = args.includes('--no-snap');
-  const noHints = args.includes('--no-hints');
-  const cmdArgs = args.slice(1).filter(a => a !== '--no-snap' && a !== '--no-hints');
+  const effectiveArgs = session ? args : args.slice(1);
+  const noSnap = parsed.options.raw || effectiveArgs.includes('--no-snap');
+  const noHints = parsed.options.raw || effectiveArgs.includes('--no-hints');
+  const cmdArgs = effectiveArgs.filter(a => a !== '--no-snap' && a !== '--no-hints');
 
   // Join arguments for commands that accept free-form text
   if (cmd === 'eval') {
@@ -329,9 +439,25 @@ async function main() {
   const response = await sendCommand(conn, { cmd, args: cmdArgs });
 
   if (response.ok) {
-    if (response.result) console.log(response.result);
+    if (sessionName && SESSION_PERSIST_COMMANDS.has(cmd)) {
+      await persistSessionState(targetId, sessionName).catch(() => {});
+    }
+    printEnvelope({
+      ok: true,
+      command: cmd,
+      target: targetId,
+      text: response.result || '',
+      data: response.data ?? null,
+      artifacts: response.artifacts || [],
+    }, parsed.options);
   } else {
-    console.error('Error:', response.error);
+    printEnvelope({
+      ok: false,
+      command: cmd,
+      target: targetId,
+      text: '',
+      error: response.error,
+    }, parsed.options);
     process.exitCode = 1;
   }
 }
@@ -362,6 +488,144 @@ function parseFlags(args, booleanFlags, valueFlags) {
   return result;
 }
 
+function parseGlobalArgs(argv) {
+  const args = [];
+  const options = {
+    raw: false,
+    json: false,
+    sessionName: process.env.CHROMEX_SESSION || '',
+  };
+  for (let i = 0; i < argv.length; i++) {
+    const arg = argv[i];
+    if (arg === '--raw') {
+      options.raw = true;
+      continue;
+    }
+    if (arg === '--json') {
+      options.json = true;
+      continue;
+    }
+    if (arg === '-s' || arg === '--session') {
+      options.sessionName = argv[++i] || '';
+      continue;
+    }
+    if (arg.startsWith('-s=')) {
+      options.sessionName = arg.slice(3);
+      continue;
+    }
+    if (arg.startsWith('--session=')) {
+      options.sessionName = arg.slice('--session='.length);
+      continue;
+    }
+    args.push(arg);
+  }
+  return { args, options };
+}
+
+function printEnvelope(envelope, options = {}) {
+  const normalized = {
+    ok: !!envelope.ok,
+    command: envelope.command || null,
+    target: envelope.target || null,
+    text: envelope.text ?? '',
+    data: envelope.data ?? null,
+    artifacts: envelope.artifacts || [],
+    error: envelope.error || null,
+  };
+  if (options.json) {
+    console.log(JSON.stringify(normalized));
+    return;
+  }
+  if (normalized.ok) {
+    if (normalized.text) console.log(normalized.text);
+    return;
+  }
+  console.error('Error:', normalized.error || normalized.text || 'unknown error');
+}
+
+async function getLivePages() {
+  const cdp = new CDP(config.commandTimeout);
+  await cdp.connect(getWsUrl());
+  const pages = await getPages(cdp);
+  cdp.close();
+  writeFileSync(config._pagesCachePath, JSON.stringify(pages));
+  return pages;
+}
+
+async function getShowResult(records, annotate) {
+  let cdp = null;
+  let connected = false;
+  try {
+    cdp = new CDP(config.commandTimeout);
+    await cdp.connect(getWsUrl());
+    connected = true;
+    const pages = await getPages(cdp);
+    return await showStr(cdp, records, pages, annotate, config);
+  } catch {
+    return await showStr(null, records, [], annotate, config);
+  } finally {
+    if (connected) cdp?.close();
+  }
+}
+
+function openDashboard(path) {
+  if (process.env.CI || process.env.CHROMEX_NO_OPEN) return false;
+  const opener = process.platform === 'darwin' ? ['open', [path]]
+    : process.platform === 'linux' ? ['xdg-open', [path]]
+      : null;
+  if (!opener) return false;
+  try {
+    const child = spawn(opener[0], opener[1], { detached: true, stdio: 'ignore' });
+    child.unref();
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function closeSessionRecords(records, options = {}) {
+  if (records.length === 0) return;
+  const persist = options.persist !== false;
+  const cdp = new CDP(config.commandTimeout);
+  await cdp.connect(getWsUrl());
+  for (const record of records) {
+    if (!record?.targetId) continue;
+    if (persist && record.name) await persistSessionState(record.targetId, record.name).catch(() => {});
+    await stopDaemons(record.targetId, config).catch(() => {});
+    await cdp.send('Target.closeTarget', { targetId: record.targetId }).catch(() => {});
+    if (record.browserContextId) {
+      await cdp.send('Target.disposeBrowserContext', { browserContextId: record.browserContextId }).catch(() => {});
+    }
+    if (record.name) removeSession(config, record.name);
+  }
+  cdp.close();
+}
+
+function clearSessionRecords(records) {
+  for (const record of records) {
+    if (record?.name) removeSession(config, record.name);
+  }
+}
+
+async function restoreSessionState(targetId, statePath) {
+  if (!statePath || !existsSync(statePath)) return false;
+  const conn = await getOrStartTabDaemon(targetId, config);
+  const response = await sendCommand(conn, { cmd: 'state', args: ['load', statePath] });
+  if (!response.ok) return false;
+  const reloadConn = await getOrStartTabDaemon(targetId, config);
+  await sendCommand(reloadConn, { cmd: 'nav', args: ['reload', '--no-snap', '--no-hints'] }).catch(() => {});
+  return true;
+}
+
+async function persistSessionState(targetId, name) {
+  const statePath = sessionStatePath(name);
+  const conn = await getOrStartTabDaemon(targetId, config);
+  const response = await sendCommand(conn, { cmd: 'state', args: ['save', statePath] });
+  if (!response.ok) return false;
+  setSession(config, name, { targetId, statePath });
+  return true;
+}
+
 // Helper for list -- connect through an existing socket
 async function connectAndAuthFromSocket(socketPath) {
   const { getOrCreateToken } = await import('./lib/daemon.mjs');
@@ -388,4 +652,7 @@ async function connectAndAuthFromSocket(socketPath) {
   });
 }
 
-main().catch(e => { console.error(e.message); process.exit(1); });
+main().catch(e => {
+  printEnvelope({ ok: false, command: null, text: '', error: e.message }, activeOutputOptions);
+  process.exit(1);
+});

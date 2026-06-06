@@ -33,6 +33,10 @@ export function getPagesCachePath(socketDir) {
   return resolve(socketDir, 'pages.json');
 }
 
+export function getSessionsPath(configDir) {
+  return resolve(configDir, 'sessions.json');
+}
+
 export function ensureDir(dir) {
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true, mode: 0o700 });
 }
@@ -95,6 +99,7 @@ export function loadConfig() {
   config._socketDir = getSocketDir(configDir);
   config._tokenPath = getTokenPath(config._socketDir);
   config._pagesCachePath = getPagesCachePath(config._socketDir);
+  config._sessionsPath = getSessionsPath(configDir);
   config._auditLogPath = getAuditLogPath(configDir);
   return config;
 }

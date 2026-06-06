@@ -2,12 +2,19 @@
 // No real browser -- tests pure logic and error handling
 
 import { describe, it, expect } from 'vitest';
-import { readFileSync, unlinkSync } from 'fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, unlinkSync } from 'fs';
+import { tmpdir } from 'os';
+import { join } from 'path';
 import { parseKeyCombo, pressKeyStr } from '../plugins/chromex/skills/chromex/scripts/lib/commands/keyboard.mjs';
 import { SessionStats, statsStr } from '../plugins/chromex/skills/chromex/scripts/lib/commands/stats.mjs';
 import { netListStr, netDetailStr } from '../plugins/chromex/skills/chromex/scripts/lib/commands/network.mjs';
 import { consoleListStr, consoleDetailStr } from '../plugins/chromex/skills/chromex/scripts/lib/commands/console.mjs';
 import { appStr, cacheStr, clearSiteDataStr, idbStr, serviceWorkersStr, storageUsageStr } from '../plugins/chromex/skills/chromex/scripts/lib/commands/app.mjs';
+import { stateStr } from '../plugins/chromex/skills/chromex/scripts/lib/commands/state.mjs';
+import { buildLocator } from '../plugins/chromex/skills/chromex/scripts/lib/commands/locator.mjs';
+import { interceptStr } from '../plugins/chromex/skills/chromex/scripts/lib/commands/intercept.mjs';
+import { showStr } from '../plugins/chromex/skills/chromex/scripts/lib/commands/show.mjs';
+import { sessionStatePath } from '../plugins/chromex/skills/chromex/scripts/lib/sessions.mjs';
 
 // Mock CDP client that records sent commands
 function mockCdp() {
@@ -56,6 +63,65 @@ function scriptedCdp(handlers = {}) {
       if (typeof handler === 'function') return handler(params, sid, { emit, sent });
       if (handler instanceof Error) throw handler;
       return handler || {};
+    },
+  };
+}
+
+function stateCdp() {
+  const sent = [];
+  return {
+    sent,
+    async send(method, params, sid) {
+      sent.push({ method, params, sid });
+      if (method === 'Runtime.evaluate') {
+        if (params.expression === 'window.location.href') return { result: { value: 'https://app.example.test/dashboard' } };
+        if (params.expression === 'window.location.origin') return { result: { value: 'https://app.example.test' } };
+        if (params.expression.includes('Object.keys(localStorage).map')) {
+          return { result: { value: JSON.stringify([{ name: 'theme', value: 'dark' }]) } };
+        }
+        return { result: { value: undefined } };
+      }
+      if (method === 'Network.getCookies') {
+        return {
+          cookies: [{
+            name: 'session_id',
+            value: 'secret-value',
+            domain: 'app.example.test',
+            path: '/',
+            expires: -1,
+            httpOnly: true,
+            secure: true,
+            sameSite: 'Lax',
+          }],
+        };
+      }
+      if (method === 'Network.setCookie') return { success: true };
+      return {};
+    },
+  };
+}
+
+function showCdp() {
+  const sent = [];
+  return {
+    sent,
+    async send(method, params, sid) {
+      sent.push({ method, params, sid });
+      if (method === 'Target.attachToTarget') return { sessionId: 'session-preview' };
+      if (method === 'Page.captureScreenshot') return { data: Buffer.from('preview').toString('base64') };
+      if (method === 'Runtime.evaluate') return { result: { value: [] } };
+      if (method === 'Accessibility.getFullAXTree') {
+        return {
+          nodes: [
+            { nodeId: '1', role: { value: 'RootWebArea' }, name: { value: 'Demo' }, childIds: ['2'], backendDOMNodeId: 1, properties: [] },
+            { nodeId: '2', parentId: '1', role: { value: 'button' }, name: { value: 'Save' }, backendDOMNodeId: 2, properties: [] },
+          ],
+        };
+      }
+      if (method === 'DOM.getBoxModel') {
+        return { model: { border: [10, 20, 90, 20, 90, 60, 10, 60] } };
+      }
+      return {};
     },
   };
 }
@@ -305,6 +371,153 @@ describe('Application state commands', () => {
     expect(output).toContain('serviceWorkers: 1 active, 1 waiting');
     expect(output).toContain('storageBuckets: 1 bucket');
     expect(output).toContain('manifest: present (Demo App)');
+  });
+});
+
+describe('Storage state command', () => {
+  it('saves cookies and localStorage using portable state shape', async () => {
+    const file = `/tmp/chromex-state-${Date.now()}.json`;
+    const cdp = stateCdp();
+
+    const output = await stateStr(cdp, 'sid1', 'save', file);
+    const saved = JSON.parse(readFileSync(file, 'utf8'));
+
+    expect(output.text).toContain('Storage state saved');
+    expect(output.artifacts[0].path).toBe(file);
+    expect(saved.cookies[0].name).toBe('session_id');
+    expect(saved.cookies[0].value).toBe('secret-value');
+    expect(saved.origins[0].origin).toBe('https://app.example.test');
+    expect(saved.origins[0].localStorage).toEqual([{ name: 'theme', value: 'dark' }]);
+    unlinkSync(file);
+  });
+
+  it('loads matching origin and reports ignored origins', async () => {
+    const file = `/tmp/chromex-state-load-${Date.now()}.json`;
+    const state = {
+      cookies: [{ name: 'session_id', value: 'secret-value', domain: 'app.example.test', path: '/', httpOnly: true, secure: true, sameSite: 'Lax' }],
+      origins: [
+        { origin: 'https://app.example.test', localStorage: [{ name: 'theme', value: 'dark' }] },
+        { origin: 'https://other.example.test', localStorage: [{ name: 'skip', value: '1' }] },
+      ],
+    };
+    await import('fs').then(fs => fs.writeFileSync(file, JSON.stringify(state)));
+    const cdp = stateCdp();
+
+    const output = await stateStr(cdp, 'sid1', 'load', file);
+
+    expect(output.data).toEqual({ cookies: 1, localStorage: 1, ignoredOrigins: 1 });
+    expect(cdp.sent.some(call => call.method === 'Network.setCookie')).toBe(true);
+    unlinkSync(file);
+  });
+});
+
+describe('Locator generation', () => {
+  it('prefers test id for chromex-test locators', () => {
+    const locator = buildLocator({
+      tagName: 'button',
+      testId: 'submit-button',
+      accessibleName: 'Submit',
+      css: 'button:nth-of-type(1)',
+    }, 'chromex-test');
+
+    expect(locator.value).toBe('page.getByTestId("submit-button")');
+    expect(locator.stable).toBe(true);
+  });
+
+  it('returns CSS fallback for css format', () => {
+    const locator = buildLocator({
+      tagName: 'input',
+      nameAttr: 'email',
+      css: 'form > input:nth-of-type(1)',
+    }, 'css');
+
+    expect(locator.value).toBe('input[name="email"]');
+  });
+});
+
+describe('Show dashboard command', () => {
+  it('writes dashboard previews, snapshots and annotation packs', async () => {
+    const cwd = process.cwd();
+    const dir = mkdtempSync(join(tmpdir(), 'chromex-show-'));
+    const previousArtifactRoot = process.env.CHROMEX_ARTIFACT_ROOT;
+    process.env.CHROMEX_ARTIFACT_ROOT = join(dir, 'artifacts');
+    const cdp = showCdp();
+
+    try {
+      process.chdir(dir);
+      const result = await showStr(
+        cdp,
+        [{ name: 'auth', targetId: 'ABCDEF123456', title: 'Login', url: 'https://app.example.test/login', workspace: dir }],
+        [{ targetId: 'ABCDEF123456', title: 'Login', url: 'https://app.example.test/login' }],
+        true,
+        { allowedDomains: [], blockedDomains: [] }
+      );
+
+      const dashboard = result.artifacts.find(item => item.path.endsWith('/index.html'));
+      const preview = result.artifacts.find(item => item.path.endsWith('.png'));
+      const snapshot = result.artifacts.find(item => item.type === 'snapshots');
+      const annotation = result.artifacts.find(item => item.type === 'annotations');
+      const annotationData = JSON.parse(readFileSync(annotation.path, 'utf8'));
+
+      expect(existsSync(dashboard.path)).toBe(true);
+      expect(existsSync(preview.path)).toBe(true);
+      expect(existsSync(snapshot.path)).toBe(true);
+      expect(annotationData.evidence[0].screenshot).toBe(preview.path);
+      expect(annotationData.evidence[0].snapshot).toBe(snapshot.path);
+      expect(readFileSync(dashboard.path, 'utf8')).toContain('<img src="auth-ABCDEF12-');
+      expect(readFileSync(dashboard.path, 'utf8')).toContain('id="export-json"');
+      expect(readFileSync(dashboard.path, 'utf8')).toContain('showSaveFilePicker');
+      expect(annotationData.schemaVersion).toBe(1);
+      expect(annotationData.annotations).toEqual([]);
+      expect(readFileSync(snapshot.path, 'utf8')).toContain('[box=10,20,80,40]');
+      expect(cdp.sent.some(call => call.method === 'Target.detachFromTarget')).toBe(true);
+    } finally {
+      process.chdir(cwd);
+      if (previousArtifactRoot === undefined) delete process.env.CHROMEX_ARTIFACT_ROOT;
+      else process.env.CHROMEX_ARTIFACT_ROOT = previousArtifactRoot;
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('Named session persistence', () => {
+  it('uses a stable storage state path under Chromex session data', () => {
+    const path = sessionStatePath('auth');
+
+    expect(path).toContain('/.chromex/session-data/auth/storage-state.json');
+  });
+});
+
+describe('Advanced intercept command', () => {
+  it('mocks response with status, headers and body flag', async () => {
+    const cdp = scriptedCdp();
+
+    await interceptStr(cdp, 'sid1', 'mock', '**/api/users', '--status=201', '--content-type=text/plain', '--header=X-Test: yes', '--body=ok');
+    cdp.emit('Fetch.requestPaused', { requestId: 'req1', request: { url: 'https://app.example.test/api/users', headers: {} } });
+    await new Promise(resolve => setTimeout(resolve, 5));
+
+    const fulfill = cdp.sent.find(call => call.method === 'Fetch.fulfillRequest');
+    expect(fulfill.params.responseCode).toBe(201);
+    expect(fulfill.params.responseHeaders).toContainEqual({ name: 'Content-Type', value: 'text/plain' });
+    expect(fulfill.params.responseHeaders).toContainEqual({ name: 'X-Test', value: 'yes' });
+    expect(Buffer.from(fulfill.params.body, 'base64').toString()).toBe('ok');
+  });
+
+  it('removes sensitive request headers before continuing', async () => {
+    const cdp = scriptedCdp();
+
+    await interceptStr(cdp, 'sid1', 'on', '**/*', '--remove-header=authorization,cookie');
+    cdp.emit('Fetch.requestPaused', {
+      requestId: 'req2',
+      request: {
+        url: 'https://app.example.test/api',
+        headers: { Authorization: 'Bearer x', Cookie: 'a=b', Accept: 'application/json' },
+      },
+    });
+    await new Promise(resolve => setTimeout(resolve, 5));
+
+    const continued = cdp.sent.find(call => call.method === 'Fetch.continueRequest');
+    expect(continued.params.headers).toEqual([{ name: 'Accept', value: 'application/json' }]);
   });
 });
 

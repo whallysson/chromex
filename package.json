@@ -1,7 +1,7 @@
 {
   "name": "chromex-mcp",
-  "version": "1.6.0",
-  "description": "Zero-dependency Chrome DevTools Protocol MCP server for AI agents. 73 typed tools, Application state inspection, per-tab daemons, security hardened, contextual hints, query-filtered snapshots.",
+  "version": "1.7.0",
+  "description": "Zero-dependency Chrome DevTools Protocol MCP server for AI agents. 77 typed tools, Application state inspection, per-tab daemons, security hardened, contextual hints, query-filtered snapshots.",
   "type": "module",
   "bin": {
     "chromex": "bin/chromex.mjs",
@@ -16,6 +16,7 @@
   ],
   "scripts": {
     "test": "vitest run",
+    "test:smoke": "node tests/smoke/agent-dx-smoke.mjs",
     "test:watch": "vitest"
   },
   "keywords": [
@@ -30,7 +31,7 @@
     "browser",
     "testing",
     "scraping",
-    "playwright-alternative"
+    "browser-automation"
   ],
   "author": {
     "name": "Whallysson Avelino",

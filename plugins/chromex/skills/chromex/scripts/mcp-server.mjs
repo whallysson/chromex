@@ -13,6 +13,8 @@ import { getOrStartTabDaemon, sendCommand, stopDaemons, checkTargetDomain } from
 import { launchBrowser, incognitoContext } from './lib/launcher.mjs';
 import { openTabStr, closeTabStr, focusTabStr } from './lib/commands/tab.mjs';
 import { doctorStr } from './lib/commands/doctor.mjs';
+import { formatSessions, listSessions } from './lib/sessions.mjs';
+import { showStr } from './lib/commands/show.mjs';
 
 const config = loadConfig();
 const SERVER_INFO = { name: 'chromex', version: '1.6.0' };
@@ -27,13 +29,21 @@ function ok(text) {
   return { content: [{ type: 'text', text: text ?? '' }] };
 }
 
-function okWithImage(text, base64Data, mimeType = 'image/png') {
-  return {
+function okStructured(text, structuredContent) {
+  const result = { content: [{ type: 'text', text: text ?? '' }] };
+  if (structuredContent !== undefined) result.structuredContent = structuredContent;
+  return result;
+}
+
+function okWithImage(text, base64Data, mimeType = 'image/png', structuredContent) {
+  const result = {
     content: [
       { type: 'image', data: base64Data, mimeType },
       { type: 'text', text },
     ],
   };
+  if (structuredContent !== undefined) result.structuredContent = structuredContent;
+  return result;
 }
 
 function fail(text) {
@@ -58,7 +68,7 @@ const P_TARGET = { type: 'string', description: 'Target ID prefix from chromex_l
 const P_NO_SNAP = { type: 'boolean', description: 'Skip auto-snapshot after action' };
 const P_NO_HINTS = { type: 'boolean', description: 'Skip contextual help[] suggestions in output' };
 
-// ---- Tool definitions (73 tools) ----
+// ---- Tool definitions ----
 
 const TOOLS = [
   // == PAGES (no daemon) ==
@@ -106,6 +116,16 @@ const TOOLS = [
     'Stop per-tab daemon(s). Without target, stops all.',
     { target: { type: 'string', description: 'Target ID prefix. Omit to stop all.' } },
     [], DESTRUCTIVE),
+
+  tool('chromex_sessions',
+    'List named Chromex sessions managed by the CLI.',
+    {}, [], RO),
+
+  tool('chromex_show',
+    'Create a local dashboard artifact for named Chromex sessions. Annotation mode also writes an annotation pack.',
+    {
+      annotate: { type: 'boolean', description: 'Write annotation pack alongside the dashboard', default: false },
+    }, [], RO),
 
   // == INSPECT (readOnly) ==
   tool('chromex_snapshot',
@@ -170,6 +190,14 @@ const TOOLS = [
       target: P_TARGET,
       selector: { type: 'string', description: "CSS selector to highlight, or 'clear'" },
     }, ['target', 'selector'], RW),
+
+  tool('chromex_locator',
+    'Generate a stable locator for an element ref or CSS selector.',
+    {
+      target: P_TARGET,
+      selector: { type: 'string', description: 'Element ref @eN or CSS selector' },
+      format: { type: 'string', enum: ['chromex-test', 'css', 'testing-library'], description: 'Locator output format', default: 'chromex-test' },
+    }, ['target', 'selector'], RO),
 
   // == EVALUATE ==
   tool('chromex_eval',
@@ -383,6 +411,14 @@ const TOOLS = [
       action: { type: 'string', enum: ['local', 'session', 'clear'], description: 'Storage action' },
     }, ['target', 'action'], RW),
 
+  tool('chromex_state',
+    'Save or load portable storage state for cookies and localStorage.',
+    {
+      target: P_TARGET,
+      action: { type: 'string', enum: ['save', 'load'], description: 'Save or load state' },
+      filePath: { type: 'string', description: 'Storage state file path' },
+    }, ['target', 'action'], RW),
+
   tool('chromex_storage_usage',
     'Show origin storage usage, quota, and per-storage-type breakdown.',
     { target: P_TARGET }, ['target'], RO),
@@ -510,6 +546,12 @@ const TOOLS = [
       action: { type: 'string', enum: ['on', 'block', 'mock', 'off', 'rules'], description: 'Action' },
       pattern: { type: 'string', description: 'URL pattern (glob). Required for block/mock.' },
       body: { type: 'string', description: 'Mock response body (JSON). Required for mock.' },
+      status: { type: 'number', description: 'Mock response status code' },
+      contentType: { type: 'string', description: 'Mock response content type' },
+      headers: { type: 'array', items: { type: 'string' }, description: 'Response headers as "Name: value"' },
+      delay: { type: 'number', description: 'Delay mocked response in ms' },
+      abort: { type: 'string', description: 'Fetch error reason for block action' },
+      removeHeaders: { type: 'array', items: { type: 'string' }, description: 'Request headers to remove before continuing' },
     }, ['target', 'action'], RW),
 
   tool('chromex_har',
@@ -664,6 +706,7 @@ function toolToCmd(name, p) {
     }
     case 'chromex_domsnapshot': return { cmd: 'domsnapshot', args: p.styles ? ['--styles'] : [] };
     case 'chromex_highlight':  return { cmd: 'highlight', args: [p.selector] };
+    case 'chromex_locator':    return { cmd: 'locator', args: [p.selector, p.format ? `--format=${p.format}` : '--format=chromex-test'] };
 
     // Evaluate
     case 'chromex_eval':       return { cmd: 'eval', args: [p.expression] };
@@ -697,6 +740,7 @@ function toolToCmd(name, p) {
     // Data
     case 'chromex_cookies':    return { cmd: 'cookies', args: [p.action || 'list', ...(p.arg ? [p.arg] : [])] };
     case 'chromex_storage':    return { cmd: 'storage', args: [p.action] };
+    case 'chromex_state':      return { cmd: 'state', args: [p.action, ...(p.filePath ? [p.filePath] : [])] };
     case 'chromex_storage_usage': return { cmd: 'storage', args: ['usage'] };
     case 'chromex_storage_clear_site_data': return { cmd: 'storage', args: ['clear-site-data'] };
     case 'chromex_app_summary': return { cmd: 'app', args: ['summary'] };
@@ -728,7 +772,17 @@ function toolToCmd(name, p) {
       }
       return { cmd: 'throttle', args: [p.preset] };
     }
-    case 'chromex_intercept':  return { cmd: 'intercept', args: [p.action, ...(p.pattern ? [p.pattern] : []), ...(p.body ? [p.body] : [])] };
+    case 'chromex_intercept': {
+      const a = [p.action, ...(p.pattern ? [p.pattern] : [])];
+      if (p.status != null) a.push(`--status=${p.status}`);
+      if (p.contentType) a.push(`--content-type=${p.contentType}`);
+      if (p.headers) for (const header of p.headers) a.push(`--header=${header}`);
+      if (p.delay != null) a.push(`--delay=${p.delay}`);
+      if (p.abort) a.push(`--abort=${p.abort}`);
+      if (p.removeHeaders?.length) a.push(`--remove-header=${p.removeHeaders.join(',')}`);
+      if (p.body) a.push(`--body=${p.body}`);
+      return { cmd: 'intercept', args: a };
+    }
     case 'chromex_har':        return { cmd: 'har', args: p.filePath ? [p.action, p.filePath] : [p.action] };
 
     // Emulate
@@ -791,7 +845,7 @@ async function resolveTarget(prefix) {
 // Commands that use direct CDP (no daemon)
 const NO_DAEMON = new Set([
   'chromex_list', 'chromex_launch', 'chromex_doctor', 'chromex_open', 'chromex_close',
-  'chromex_focus', 'chromex_incognito', 'chromex_stop',
+  'chromex_focus', 'chromex_incognito', 'chromex_stop', 'chromex_sessions', 'chromex_show',
 ]);
 
 // Helper: connect to browser, execute, disconnect
@@ -853,6 +907,28 @@ async function executeTool(name, params) {
     return ok('Daemon(s) stopped.');
   }
 
+  if (name === 'chromex_sessions') {
+    return withBrowser(async (cdp) => {
+      const pages = await getPages(cdp);
+      const records = listSessions(config);
+      return okStructured(formatSessions(records, pages), { sessions: records, pages });
+    }).catch(() => {
+      const records = listSessions(config);
+      return okStructured(formatSessions(records, []), { sessions: records, pages: [] });
+    });
+  }
+
+  if (name === 'chromex_show') {
+    return withBrowser(async (cdp) => {
+      const pages = await getPages(cdp);
+      const result = await showStr(cdp, listSessions(config), pages, !!params.annotate, config);
+      return okStructured(result.text, { data: result.data, artifacts: result.artifacts });
+    }).catch(() => {
+      return showStr(null, listSessions(config), [], !!params.annotate, config)
+        .then(result => okStructured(result.text, { data: result.data, artifacts: result.artifacts }));
+    });
+  }
+
   // -- Daemon commands (via IPC Unix socket) --
 
   if (!NO_DAEMON.has(name) && !params.target) {
@@ -882,8 +958,12 @@ async function executeTool(name, params) {
       const imageData = readFileSync(screenshotPath).toString('base64');
       const ext = screenshotPath.split('.').pop()?.toLowerCase();
       const mimeMap = { png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', webp: 'image/webp' };
-      return okWithImage(response.result, imageData, mimeMap[ext] || 'image/png');
+      return okWithImage(response.result, imageData, mimeMap[ext] || 'image/png', { data: response.data ?? null, artifacts: response.artifacts || [] });
     }
+  }
+
+  if (response.data !== undefined || response.artifacts?.length) {
+    return okStructured(response.result || '', { data: response.data ?? null, artifacts: response.artifacts || [] });
   }
 
   return ok(response.result || '');
