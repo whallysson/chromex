@@ -1,7 +1,7 @@
 {
   "name": "chromex-mcp",
-  "version": "1.7.0",
-  "description": "Zero-dependency Chrome DevTools Protocol MCP server for AI agents. 78 typed tools, Application state inspection, evidence packs, per-tab daemons, security hardened, contextual hints, query-filtered snapshots.",
+  "version": "1.8.0",
+  "description": "Agent-first Chrome DevTools toolkit with a token-efficient CLI, 85 typed MCP tools, modal-free pipe transport, diagnostics, memory analysis, extensions, and WebMCP.",
   "type": "module",
   "bin": {
     "chromex": "bin/chromex.mjs",
@@ -11,6 +11,7 @@
   "files": [
     "bin/",
     "plugins/chromex/skills/chromex/scripts/",
+    "docs/",
     "LICENSE",
     "README.md"
   ],

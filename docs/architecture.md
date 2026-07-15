@@ -1,14 +1,16 @@
 # Architecture
 
-How chromex works under the hood.
+How Chromex routes CLI and MCP operations to persistent per-tab CDP sessions.
 
 ## Overview
 
 ```
 ┌─────────────┐    Unix Socket    ┌─────────────┐    CDP WebSocket    ┌─────────────┐
-│  CLI Client  │ ◄──────────────► │   Daemon     │ ◄─────────────────► │   Chrome     │
-│  (chromex)   │    JSON + Auth   │  (per tab)   │    JSON-RPC         │   (browser)  │
+│ CLI or MCP  │ ◄──────────────► │   Daemon    │ ◄─────────────────► │   Browser   │
+│   client    │    JSON + Auth   │  (per tab)  │                      │             │
 └─────────────┘                   └─────────────┘                      └─────────────┘
+                                       │                                   ▲
+                                       └──── user-only pipe broker ────────┘
 ```
 
 ## Components
@@ -17,10 +19,12 @@ How chromex works under the hood.
 
 The entry point. Parses command-line arguments, resolves target prefixes, and dispatches commands to the appropriate daemon.
 
-- ~200 lines
-- Imports all library modules
-- Handles `list`, `launch`, `incognito`, `stop` directly (no daemon needed)
+- Handles browser discovery, `list`, `launch`, sessions, dashboards, `incognito`, and daemon lifecycle directly
 - For all other commands, connects to the daemon via Unix socket
+
+### MCP Server (`mcp-server.mjs`)
+
+The stdio JSON-RPC server exposes the same command core as 85 typed MCP tools. It negotiates supported MCP protocol versions, returns `structuredContent` for machine-readable results, and supports `full`, `core`, and `devtools` discovery sets. The focused sets reduce schema cost; they do not change the CLI implementation.
 
 ### Per-Tab Daemon (`daemon.mjs`)
 
@@ -28,7 +32,7 @@ A background Node.js process that holds a CDP WebSocket session open for a speci
 
 **Why a daemon?**
 
-Chrome's `chrome://inspect` mode shows an "Allow debugging" permission dialog the first time a client connects to a tab. Without a daemon, every single command would trigger this dialog.
+Chrome's `chrome://inspect` mode can show an "Allow debugging" permission dialog for every new DevTools connection. Without a daemon, short-lived CLI commands would create unnecessary reconnects and repeated prompts.
 
 The daemon solves this by:
 1. Connecting once via `Target.attachToTarget`
@@ -43,11 +47,10 @@ The daemon solves this by:
 2. CLI checks for existing daemon socket at ~/.chromex/run/6BE827FA...sock
 3. If no socket exists:
    a. CLI spawns: node chromex.mjs _daemon 6BE827FA... (detached)
-   b. Daemon connects to Chrome's WebSocket
-   c. Daemon calls Target.attachToTarget → Chrome shows "Allow" modal
-   d. User clicks Allow → daemon gets sessionId
-   e. Daemon creates Unix socket
-   f. CLI detects socket, connects, authenticates
+   b. Daemon connects to Chrome's WebSocket and the user approves Chrome's prompt when required
+   c. Daemon calls Target.attachToTarget and receives a sessionId
+   d. Daemon creates Unix socket
+   e. CLI detects socket, connects, authenticates
 4. CLI sends {cmd: "eval", args: ["document.title"]} via socket
 5. Daemon calls Runtime.evaluate via CDP
 6. Daemon returns {ok: true, result: "GitHub"} via socket
@@ -56,14 +59,18 @@ The daemon solves this by:
 
 ### CDP Client (`client.mjs`)
 
-A pure WebSocket client for the Chrome DevTools Protocol. No dependencies.
+A zero-dependency transport client for the Chrome DevTools Protocol over WebSocket or a local Unix pipe-broker socket.
 
 Features:
-- `connect(wsUrl)` — WebSocket connection
+- `connect(endpoint)` — WebSocket or Unix broker connection
 - `send(method, params, sessionId)` — send command with timeout
 - `onEvent(method, handler)` — subscribe to CDP events
 - `waitForEvent(method, timeout)` — one-shot event with cancellation
 - `close()` — disconnect
+
+### Pipe Broker (`browser-pipe-broker.mjs`)
+
+Owns Chrome's single `--remote-debugging-pipe` connection and exposes it through a user-only Unix socket. It remaps CDP request IDs, routes session-scoped events only to the owning client, and detaches sessions owned by a client when that client disconnects.
 
 ### IPC (`ipc.mjs`)
 
@@ -76,7 +83,7 @@ Handles communication between the CLI client and daemon processes.
 
 ### Browser Detection (`browser.mjs`)
 
-Finds the `DevToolsActivePort` file that Chrome writes when remote debugging is enabled.
+Resolves HTTP(S), WS(S), named remote endpoints, `DevToolsActivePort` files, and Chromex pipe-broker markers.
 
 Checks ~30 candidate paths across:
 - macOS + Linux
@@ -90,7 +97,7 @@ Loads `~/.chromex/config.json` with fallback to `~/.config/cdp-skill/config.json
 
 ### Command Modules (`commands/`)
 
-Each module exports pure functions with the signature:
+Command modules expose focused functions with the signature:
 
 ```javascript
 export async function commandStr(cdp, sessionId, ...args) {
@@ -99,7 +106,7 @@ export async function commandStr(cdp, sessionId, ...args) {
 }
 ```
 
-No global state, no side effects beyond CDP calls. Fully testable.
+Long-running capture state is isolated inside each per-tab daemon process. Heap analysis runs in a worker thread so large snapshot parsing does not block command IPC.
 
 ## File Layout
 
@@ -107,14 +114,18 @@ No global state, no side effects beyond CDP calls. Fully testable.
 ~/.chromex/
 ├── config.json          # Security and timeout settings
 ├── audit.log            # Command audit log
+├── artifacts/           # Workspace-scoped screenshots, traces, heap, evidence, and replay files
+├── session-data/        # Private named-session storage state
 ├── run/
 │   ├── .token           # Socket auth token (mode 0600)
 │   ├── pages.json       # Cached page list
+│   ├── pipe-....sock    # User-only shared Chrome pipe broker
 │   ├── 6BE827FA...sock  # Daemon socket for tab 6BE8...
 │   └── A3F1C920...sock  # Daemon socket for tab A3F1...
 └── profiles/
     └── testing/         # Named browser profile
-        └── DevToolsActivePort
+        ├── DevToolsActivePort
+        └── ChromexPipeActive.json
 ```
 
 ## Connection Modes
@@ -127,10 +138,9 @@ Browser                              chromex
   │ ← User enables remote debugging   │
   │   at chrome://inspect              │
   │                                    │
-  │         Target.getTargets ────────►│ list works (no per-tab permission)
-  │                                    │
-  │         Target.attachToTarget ────►│ eval/shot/etc trigger "Allow" modal
-  │ ← User clicks "Allow"             │
+  │ ← User approves each new incoming │
+  │   debugging connection as needed  │
+  │         Target.attachToTarget ────►│ daemon keeps the tab session alive
   │         Runtime.evaluate ─────────►│ command executes
 ```
 
@@ -142,11 +152,15 @@ chromex                              Browser
   │ spawn --remote-debugging-port=0 ──►│ (debugging pre-enabled, no modal)
   │                                    │
   │         Target.getTargets ────────►│ list works
-  │         Target.attachToTarget ────►│ attaches immediately (no modal!)
+  │         Target.attachToTarget ────►│ attaches immediately
   │         Runtime.evaluate ─────────►│ command executes
 ```
 
-**Mode 2 is recommended** because it never shows the "Allow debugging" modal.
+### Mode 3: `chromex launch --pipe`
+
+Chromex starts Chrome with `--remote-debugging-pipe` and owns the single pipe connection through a user-only Unix-socket broker. CLI processes, MCP, and per-tab daemons share that broker. Session-scoped CDP events are routed only to the owning client, and owned target sessions are detached when a client disconnects.
+
+Pipe mode is recommended for repeated AI use because it avoids approval prompts without weakening the protection of a normal personal browser profile. `--extension-tools` implies pipe mode.
 
 ## Supported Browsers
 
@@ -158,3 +172,5 @@ chromex                              Browser
 | Chromium | yes | yes |
 | Microsoft Edge | yes | yes |
 | Vivaldi | yes | yes |
+
+Core CDP automation works across the supported Chromium family. Experimental domains such as Chrome Extensions and WebMCP depend on the active browser build; WebMCP additionally requires a visible compatible Chrome process launched with `--webmcp`.

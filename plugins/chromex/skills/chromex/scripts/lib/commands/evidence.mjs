@@ -1,4 +1,5 @@
 import { existsSync, mkdirSync, writeFileSync } from 'fs';
+import { redactCommandArgs, redactObject, redactText, redactUrl } from '../redaction.mjs';
 import { dirname, relative } from 'path';
 import { resolveArtifactPath, timestamp } from '../artifacts.mjs';
 import { htmlStr } from './html.mjs';
@@ -26,25 +27,26 @@ export function recordEvidenceAction(state, command, args, ok, text) {
     command,
     args: sanitizeArgs(command, args),
     ok: !!ok,
-    text: String(text || '').slice(0, 500),
+    text: redactText(text, { maxLength: 500 }),
   });
 }
 
 async function startEvidence(cdp, sid, targetId, state, name, context) {
   if (state.active) throw new Error(`Evidence pack already active: ${state.active.name}`);
-  const safe = safeName(name);
+  const safeNameValue = redactText(name, { maxLength: 200 });
+  const safe = safeName(safeNameValue);
   const startedAt = new Date().toISOString();
   const rootFile = resolveArtifactPath(null, 'evidence', `${safe}-${timestamp()}/evidence.json`);
   const root = dirname(rootFile);
   for (const dir of ['screenshots', 'snapshots', 'html']) mkdirSync(`${root}/${dir}`, { recursive: true, mode: 0o700 });
   state.active = {
     version: 1,
-    name,
+    name: safeNameValue,
     targetId,
     root,
     startedAt,
     stoppedAt: null,
-    timeline: [{ type: 'start', ts: startedAt, name }],
+    timeline: [{ type: 'start', ts: startedAt, name: safeNameValue }],
     marks: [],
     artifacts: [],
   };
@@ -64,7 +66,7 @@ async function stopEvidence(cdp, sid, state, label, context) {
   if (!state.active) throw new Error('No active evidence pack. Run "evidence start [name]" first.');
   const mark = await captureMark(cdp, sid, state.active, label, context);
   state.active.stoppedAt = new Date().toISOString();
-  state.active.timeline.push({ type: 'stop', ts: state.active.stoppedAt, label });
+  state.active.timeline.push({ type: 'stop', ts: state.active.stoppedAt, label: redactText(label, { maxLength: 200 }) });
   await writePack(state.active, context);
   const pack = state.active;
   state.last = pack;
@@ -93,24 +95,25 @@ function replayEvidence(state) {
 
 async function captureMark(cdp, sid, pack, label, context) {
   const id = String(pack.marks.length + 1).padStart(3, '0');
-  const safe = safeName(label || `mark-${id}`);
+  const safeLabel = redactText(label || `mark-${id}`, { maxLength: 200 });
+  const safe = safeName(safeLabel);
   const base = `${id}-${safe}`;
   const info = await pageInfo(cdp, sid);
   const screenshotPath = `${pack.root}/screenshots/${base}.png`;
   const snapshotPath = `${pack.root}/snapshots/${base}.yml`;
   const htmlPath = `${pack.root}/html/${base}.html`;
   const screenshot = await cdp.send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false }, sid);
-  writeFileSync(screenshotPath, Buffer.from(screenshot.data, 'base64'));
+  writeFileSync(screenshotPath, Buffer.from(screenshot.data, 'base64'), { mode: 0o600 });
   const snap = await snapshotStr(cdp, sid, true, true, null, 0, null, { boxes: true });
-  writeFileSync(snapshotPath, snap.text);
+  writeFileSync(snapshotPath, snap.text, { mode: 0o600 });
   const html = await htmlStr(cdp, sid);
-  writeFileSync(htmlPath, html);
+  writeFileSync(htmlPath, html, { mode: 0o600 });
   const mark = {
     id,
-    label,
+    label: safeLabel,
     ts: new Date().toISOString(),
-    url: info.url,
-    title: info.title,
+    url: redactUrl(info.url),
+    title: redactText(info.title, { maxLength: 500 }),
     viewport: info.viewport,
     artifacts: {
       screenshot: screenshotPath,
@@ -119,7 +122,7 @@ async function captureMark(cdp, sid, pack, label, context) {
     },
   };
   pack.marks.push(mark);
-  pack.timeline.push({ type: 'mark', ts: mark.ts, id, label, url: info.url, title: info.title });
+  pack.timeline.push({ type: 'mark', ts: mark.ts, id, label: safeLabel, url: redactUrl(info.url), title: redactText(info.title, { maxLength: 500 }) });
   pack.artifacts.push(
     { type: 'evidence-screenshot', path: screenshotPath },
     { type: 'evidence-snapshot', path: snapshotPath },
@@ -147,9 +150,9 @@ async function writeRuntimeFiles(pack, context) {
   const networkPath = `${pack.root}/network.json`;
   const timelinePath = `${pack.root}/timeline.json`;
   const networkEntries = context.networkRequests ? [...context.networkRequests.entries()] : [];
-  writeFileSync(consolePath, JSON.stringify(context.consoleMessages || [], null, 2));
-  writeFileSync(networkPath, JSON.stringify(networkEntries.map(([id, request]) => ({ id, ...request })), null, 2));
-  writeFileSync(timelinePath, JSON.stringify(pack.timeline, null, 2));
+  writeFileSync(consolePath, JSON.stringify(redactObject(context.consoleMessages || []), null, 2), { mode: 0o600 });
+  writeFileSync(networkPath, JSON.stringify(redactObject(networkEntries.map(([id, request]) => ({ id, ...request }))), null, 2), { mode: 0o600 });
+  writeFileSync(timelinePath, JSON.stringify(pack.timeline, null, 2), { mode: 0o600 });
   upsertArtifact(pack, { type: 'evidence-console', path: consolePath });
   upsertArtifact(pack, { type: 'evidence-network', path: networkPath });
   upsertArtifact(pack, { type: 'evidence-timeline', path: timelinePath });
@@ -168,8 +171,8 @@ async function writePack(pack, context) {
     marks: pack.marks,
     timeline: pack.timeline,
     artifacts: pack.artifacts,
-  }, null, 2));
-  writeFileSync(indexPath, renderReplay(pack));
+  }, null, 2), { mode: 0o600 });
+  writeFileSync(indexPath, renderReplay(pack), { mode: 0o600 });
   pack.evidencePath = evidencePath;
   pack.indexPath = indexPath;
   upsertArtifact(pack, { type: 'evidence', path: evidencePath });
@@ -264,9 +267,7 @@ function upsert(artifacts, artifact) {
 }
 
 function sanitizeArgs(command, args = []) {
-  if (['fill', 'type'].includes(command)) return args.map((arg, index) => index === 0 ? arg : '<redacted>');
-  if (command === 'form') return ['<redacted>'];
-  return args.map(arg => String(arg).length > 120 ? `${String(arg).slice(0, 120)}...` : arg);
+  return redactCommandArgs(command, args);
 }
 
 function safeName(value) {

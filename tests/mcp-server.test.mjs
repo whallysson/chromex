@@ -5,16 +5,17 @@ import { describe, it, expect } from 'vitest';
 import { spawn } from 'child_process';
 import { resolve } from 'path';
 import { fileURLToPath } from 'url';
+import { getEncoding } from 'js-tiktoken';
 
 const __dirname = resolve(fileURLToPath(import.meta.url), '..');
 const SERVER_PATH = resolve(__dirname, '../plugins/chromex/skills/chromex/scripts/mcp-server.mjs');
 
 // Helper: send JSON-RPC messages to MCP server and collect responses
-function mcpSession(messages, timeoutMs = 10000) {
+function mcpSession(messages, timeoutMs = 10000, options = {}) {
   return new Promise((resolve, reject) => {
-    const proc = spawn(process.execPath, [SERVER_PATH], {
+    const proc = spawn(process.execPath, [SERVER_PATH, ...(options.args || [])], {
       stdio: ['pipe', 'pipe', 'pipe'],
-      env: { ...process.env, CHROMEX_ARTIFACT_ROOT: '/tmp/chromex-mcp-test-artifacts' },
+      env: { ...process.env, CHROMEX_CDP_URL: 'ws://127.0.0.1:1', CHROMEX_ARTIFACT_ROOT: '/tmp/chromex-mcp-test-artifacts', ...(options.env || {}) },
     });
 
     let buf = '';
@@ -66,12 +67,22 @@ describe('MCP Protocol', () => {
     const r = findById(responses, 0);
     expect(r).toBeDefined();
     expect(r.result.protocolVersion).toBe('2025-03-26');
-    expect(r.result.capabilities).toEqual({ tools: {} });
+    expect(r.result.capabilities).toEqual({ tools: { listChanged: false } });
     expect(r.result.serverInfo.name).toBe('chromex');
-    expect(r.result.serverInfo.version).toBe('1.6.0');
+    expect(r.result.serverInfo.version).toBe('1.8.0');
   });
 
-  it('tools/list returns 78 tools', async () => {
+  it('negotiates unknown protocol versions to the latest supported version', async () => {
+    const responses = await mcpSession([{
+      ...INIT,
+      params: { ...INIT.params, protocolVersion: '2099-01-01' },
+    }]);
+    const r = findById(responses, 0);
+
+    expect(r.result.protocolVersion).toBe('2025-11-25');
+  });
+
+  it('tools/list returns 85 tools', async () => {
     const responses = await mcpSession([
       INIT,
       INITIALIZED,
@@ -79,7 +90,41 @@ describe('MCP Protocol', () => {
     ]);
     const r = findById(responses, 1);
     expect(r).toBeDefined();
-    expect(r.result.tools).toHaveLength(78);
+    expect(r.result.tools).toHaveLength(85);
+  });
+
+  it('supports core and devtools toolsets without changing the full default', async () => {
+    const messages = [INIT, INITIALIZED, { jsonrpc: '2.0', id: 1, method: 'tools/list' }];
+    const [coreResponses, devtoolsResponses] = await Promise.all([
+      mcpSession(messages, 10000, { args: ['--toolset=core'] }),
+      mcpSession(messages, 10000, { env: { CHROMEX_TOOLSET: 'devtools' } }),
+    ]);
+    const core = findById(coreResponses, 1).result.tools.map(tool => tool.name);
+    const devtools = findById(devtoolsResponses, 1).result.tools.map(tool => tool.name);
+
+    expect(core).toHaveLength(24);
+    expect(core).toContain('chromex_snapshot');
+    expect(core).not.toContain('chromex_heap');
+    expect(devtools).toHaveLength(26);
+    expect(devtools).toContain('chromex_heap');
+    expect(devtools).toContain('chromex_issues');
+    expect(devtools).not.toContain('chromex_click');
+    expect(devtools).not.toContain('chromex_webmcp');
+    expect(devtools).not.toContain('chromex_extensions');
+  });
+
+  it('keeps focused toolsets within the MCP schema token budget', async () => {
+    const messages = [INIT, INITIALIZED, { jsonrpc: '2.0', id: 1, method: 'tools/list' }];
+    const [coreResponses, devtoolsResponses] = await Promise.all([
+      mcpSession(messages, 10000, { args: ['--toolset=core'] }),
+      mcpSession(messages, 10000, { args: ['--toolset=devtools'] }),
+    ]);
+    const encoding = getEncoding('o200k_base');
+    const core = findById(coreResponses, 1).result.tools;
+    const devtools = findById(devtoolsResponses, 1).result.tools;
+
+    expect(encoding.encode(JSON.stringify(core)).length).toBeLessThanOrEqual(5500);
+    expect(encoding.encode(JSON.stringify(devtools)).length).toBeLessThanOrEqual(5500);
   });
 
   it('noHints is declared on all tools that accept noSnap (P2 regression guard)', async () => {
@@ -117,6 +162,17 @@ describe('MCP Protocol', () => {
     expect(tool.inputSchema.properties.query.type).toBe('string');
     expect(tool.inputSchema.properties.noHints).toBeDefined();
     expect(tool.inputSchema.properties.refs).toBeDefined();
+  });
+
+  it('chromex_list exposes explicit sensitive URL reveal', async () => {
+    const responses = await mcpSession([
+      INIT,
+      INITIALIZED,
+      { jsonrpc: '2.0', id: 1, method: 'tools/list' },
+    ]);
+    const tool = findById(responses, 1).result.tools.find((item) => item.name === 'chromex_list');
+
+    expect(tool.inputSchema.properties.includeSensitive.type).toBe('boolean');
   });
 
   it('ping returns empty object', async () => {
@@ -184,7 +240,7 @@ describe('Tool Definitions', () => {
     expect(tools.length).toBeGreaterThan(0);
   });
 
-  it('all tools have name, description, inputSchema, annotations', async () => {
+  it('all tools have names, titles, schemas, and annotations', async () => {
     const responses = await mcpSession([
       INIT,
       INITIALIZED,
@@ -195,11 +251,14 @@ describe('Tool Definitions', () => {
     for (const t of tools) {
       expect(t.name).toBeDefined();
       expect(t.name).toMatch(/^chromex_/);
+      expect(t.title).toBeDefined();
       expect(t.description).toBeDefined();
       expect(t.description.length).toBeGreaterThan(10);
       expect(t.inputSchema).toBeDefined();
       expect(t.inputSchema.type).toBe('object');
       expect(t.inputSchema.additionalProperties).toBe(false);
+      expect(t.outputSchema).toBeDefined();
+      expect(t.outputSchema.type).toBe('object');
       expect(t.annotations).toBeDefined();
       expect(typeof t.annotations.readOnlyHint).toBe('boolean');
       expect(typeof t.annotations.destructiveHint).toBe('boolean');
@@ -294,6 +353,8 @@ describe('Tool Execution (no browser)', () => {
     const r = findById(responses, 1);
     expect(r.result.isError).toBe(true);
     expect(r.result.content[0].text).toContain('Target ID required');
+    expect(r.result.structuredContent.data.error).toContain('Target ID required');
+    expect(r.result.structuredContent.artifacts).toEqual([]);
   });
 
   it('daemon tool with fake target returns descriptive isError', async () => {
@@ -439,7 +500,9 @@ describe('Tool Names', () => {
     'chromex_emulate', 'chromex_geo', 'chromex_timezone',
     'chromex_locale', 'chromex_cpu', 'chromex_resize',
     'chromex_inject', 'chromex_download', 'chromex_coverage',
-    'chromex_trace', 'chromex_heap', 'chromex_webauthn',
+    'chromex_trace', 'chromex_heap', 'chromex_screencast', 'chromex_extensions',
+    'chromex_third_party', 'chromex_webmcp', 'chromex_webauthn',
+    'chromex_issues', 'chromex_inspect', 'chromex_diagnose',
     'chromex_audit', 'chromex_stats',
   ];
 

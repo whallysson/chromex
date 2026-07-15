@@ -1,5 +1,5 @@
 // Configuração centralizada -- paths, defaults, load/save
-import { readFileSync, writeFileSync, existsSync, mkdirSync, copyFileSync } from 'fs';
+import { readFileSync, writeFileSync, existsSync, mkdirSync, copyFileSync, chmodSync } from 'fs';
 import { resolve } from 'path';
 import { homedir } from 'os';
 
@@ -39,6 +39,9 @@ export function getSessionsPath(configDir) {
 
 export function ensureDir(dir) {
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true, mode: 0o700 });
+  else {
+    try { chmodSync(dir, 0o700); } catch {}
+  }
 }
 
 const DEFAULTS = {
@@ -68,6 +71,11 @@ const DEFAULTS = {
   auditLog: true,
   socketAuth: true,
   defaultScreenshotPath: null,
+  cdpUrl: null,
+  cdpEndpoint: null,
+  cdpEndpoints: {},
+  cdpHeaders: {},
+  cdpHeadersFile: null,
 };
 
 export function loadConfig() {
@@ -86,15 +94,19 @@ export function loadConfig() {
     if (configDir === CONFIG_DIR_NEW && existsSync(legacyPath)) {
       try {
         copyFileSync(legacyPath, configPath);
+        chmodSync(configPath, 0o600);
         userConfig = JSON.parse(readFileSync(configPath, 'utf8'));
       } catch { /* falha na migração, usar defaults */ }
     } else {
       // Primeira execução: gerar config default
-      writeFileSync(configPath, JSON.stringify(DEFAULTS, null, 2));
+      writeFileSync(configPath, JSON.stringify(DEFAULTS, null, 2), { mode: 0o600 });
     }
   }
 
   const config = { ...DEFAULTS, ...userConfig };
+  if (existsSync(configPath)) {
+    try { chmodSync(configPath, 0o600); } catch {}
+  }
   config._configDir = configDir;
   config._socketDir = getSocketDir(configDir);
   config._tokenPath = getTokenPath(config._socketDir);

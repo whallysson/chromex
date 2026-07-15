@@ -85,7 +85,8 @@ function markHandler(cdp, sid) {
 }
 
 function registerHandler(cdp, sid) {
-  cdp.onEvent('Fetch.requestPaused', async (params) => {
+  cdp.onEvent('Fetch.requestPaused', async (params, message) => {
+    if (message?.sessionId && message.sessionId !== sid) return;
     const { requestId, request } = params;
     const url = request.url;
 

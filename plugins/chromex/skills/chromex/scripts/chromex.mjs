@@ -2,21 +2,22 @@
 // chromex -- Chrome DevTools Protocol CLI for AI agents
 // Zero dependencies. Node 22+ (built-in WebSocket).
 
-import { writeFileSync, existsSync, readFileSync } from 'fs';
+import { existsSync, readFileSync } from 'fs';
 import { spawn } from 'child_process';
 import { loadConfig } from './lib/config.mjs';
 import { CDP } from './lib/client.mjs';
-import { getWsUrl, getPages, formatPageList } from './lib/browser.mjs';
+import { resolveWsUrl, getPages, getPagesHttp, formatPageList, redactPages, writePagesCache } from './lib/browser.mjs';
 import { audit } from './lib/security.mjs';
 import { resolvePrefix, listDaemonSockets } from './lib/utils.mjs';
 import { runDaemon } from './lib/daemon.mjs';
-import { getOrStartTabDaemon, sendCommand, stopDaemons, findAnyDaemonSocket, checkTargetDomain } from './lib/ipc.mjs';
+import { getOrStartTabDaemon, sendCommand, stopDaemons, checkTargetDomain } from './lib/ipc.mjs';
 import { launchBrowser, incognitoContext } from './lib/launcher.mjs';
 import { openTab, openTabStr, closeTabStr, focusTabStr } from './lib/commands/tab.mjs';
 import { deleteSessionData, formatSessions, getSession, listSessions, removeSession, sessionStatePath, setSession } from './lib/sessions.mjs';
 import { showStr } from './lib/commands/show.mjs';
 
-const config = loadConfig();
+const PACKAGE_INFO = JSON.parse(readFileSync(new URL('../../../../../package.json', import.meta.url), 'utf8'));
+let config;
 let activeOutputOptions = { json: false };
 
 // Commands that require a target tab
@@ -33,6 +34,11 @@ const NEEDS_TARGET = new Set([
   // Tier 3
   'trace', 'heap', 'webauthn', 'drag', 'touch', 'domsnapshot', 'highlight',
   'hover', 'key', 'resize', 'audit', 'stats',
+  'issues', 'inspect', 'diagnose',
+  'screencast',
+  'extensions',
+  'third-party',
+  'webmcp',
   // Application state
   'app', 'sw', 'cache', 'idb', 'state', 'locator', 'evidence',
 ]);
@@ -47,8 +53,16 @@ const USAGE = `chromex - Chrome DevTools Protocol CLI for AI agents
 
 Usage: chromex [--raw] [--json] [-s name] <command> [args]
 
+  GENERAL
+    version                             Print the installed Chromex version
+
+  CONNECTION
+    --cdp-url URL                       Connect through HTTP(S) discovery or WS(S)
+    --cdp-endpoint NAME                 Use a named endpoint from config
+    --cdp-headers-file FILE             JSON headers for HTTP endpoint discovery
+
   PAGES
-    list                                List open pages (shows unique target prefixes)
+    list [--include-sensitive]          List open pages (shows unique target prefixes)
     sessions                            List named Chromex sessions
     show [--annotate]                   Open local session dashboard artifact
     open    <url>                       Open new tab
@@ -63,6 +77,9 @@ Usage: chromex [--raw] [--json] [-s name] <command> [args]
       --headless                        Launch in headless mode (no UI)
       --proxy PROXY                     Proxy server (e.g. socks5://localhost:1080)
       --insecure                        Ignore certificate errors
+      --pipe                            Use modal-free shared remote debugging pipe
+      --extension-tools                 Enable Chrome's unsafe extension debugging domain
+      --webmcp                          Enable the experimental WebMCP browser feature
       --chrome-arg FLAG                 Pass custom Chrome flag (e.g. --chrome-arg --disable-web-security)
     incognito [url]                     Create isolated browser context (no relaunch)
     close-all                           Close named Chromex sessions
@@ -85,13 +102,24 @@ Usage: chromex [--raw] [--json] [-s name] <command> [args]
       --quality=N                       Compression quality 0-100 (JPEG/WebP)
       @eN                               Capture specific element by ref
     net     <target> [requestId]        Network requests list, or detail by request ID
-    perf    <target>                    Core Web Vitals + performance metrics
+      --include-sensitive              Reveal secrets only in this live response
+      --url=TEXT --method=GET           Filter request list
+      --status=4xx --type=XHR --failed Filter failures, status, or resource type
+      --limit=N --cursor=N              Page through captured requests
+      --body-limit=N                    Expand detail bodies up to 1,000,000 characters
+    perf    <target> [action] [file]    Vitals, INP, long tasks, CPU/heap sampling profiles
     console <target> [duration_ms]      Capture console output (default 5000ms)
     console <target> list               Show stored messages since daemon start
     console <target> detail <id>        Message detail with stack trace
+      --type=error --query=TEXT         Filter stored messages
+      --limit=N --cursor=N              Page through stored messages
+      --include-sensitive              Reveal secrets only in this live response
     domsnapshot <target> [--styles]     Structured DOM snapshot with bounding rects
     highlight <target> <sel|clear>      Highlight element with overlay
     evidence <target> <action> [label]  Evidence pack: start, mark, stop, status, replay, capture
+    issues  <target> <action>          Browser issues: enable, list, clear, check-forms, disable
+    inspect <target> <action> <sel>    CSS/listeners/box: computed, matched, listeners, box, all
+    diagnose <target> [limit]          Prioritized issues, network, console and runtime diagnosis
 
   EVALUATE
     eval    <target> <expr>             Evaluate JS expression
@@ -150,8 +178,15 @@ Usage: chromex [--raw] [--json] [-s name] <command> [args]
     inject  <target> <script|flags>     Inject JS on every page load (--file, --remove, --list)
     download <target> allow|deny|reset  Control download behavior
     coverage <target> start|stop        CSS/JS code coverage report
-    trace   <target> start|stop [file]  Performance trace (chrome://tracing format)
-    heap    <target> snapshot [file]     Heap snapshot for memory analysis
+    trace   <target> <action> [arg]     Trace: start, stop, insights, insight <type>
+    heap    <target> <action> [args]     Heap capture and analysis
+      actions: snapshot, close, summary, details, class-nodes, dominators,
+               duplicate-strings, edges, retainers, retaining-paths, compare
+    screencast <target> <action> [args]  Frame capture: start, stop, status, replay
+      start [directory] [--format=jpeg|png] [--quality=N] [--max-frames=N]
+    extensions <target> <action> [args]  Extension lifecycle, targets, actions, and storage
+    third-party <target> <action> [args] Discover and execute page-exposed developer tools
+    webmcp <target> <action> [args]      List, execute, cancel, or disable page WebMCP tools
     webauthn <target> enable|creds|dis  Virtual authenticator for passkey testing
 
   AUDIT
@@ -191,43 +226,48 @@ async function main() {
   const [cmd, ...args] = parsed.args;
   const sessionName = parsed.options.sessionName;
 
+  if (cmd === 'version' || cmd === '--version' || cmd === '-v') {
+    printEnvelope({ ok: true, command: 'version', text: PACKAGE_INFO.version, data: { version: PACKAGE_INFO.version } }, parsed.options);
+    return;
+  }
+
+  if (!cmd || cmd === 'help' || cmd === '--help' || cmd === '-h') {
+    printEnvelope({ ok: true, command: cmd || 'help', text: USAGE }, parsed.options);
+    return;
+  }
+
+  config = loadConfig();
+  if (parsed.options.cdpUrl) config.cdpUrl = parsed.options.cdpUrl;
+  if (parsed.options.cdpEndpoint) config.cdpEndpoint = parsed.options.cdpEndpoint;
+  if (parsed.options.cdpHeadersFile) config.cdpHeadersFile = parsed.options.cdpHeadersFile;
+
   // Daemon mode (internal)
   if (cmd === '_daemon') {
     await runDaemon(args[0], config);
     return;
   }
 
-  if (!cmd || cmd === 'help' || cmd === '--help' || cmd === '-h') {
-    printEnvelope({ ok: true, command: cmd || 'help', text: USAGE }, parsed.options);
-    process.exit(0);
-  }
-
   // --- Commands without target ---
 
   // List
   if (cmd === 'list' || cmd === 'ls') {
-    let pages;
-    const existingSock = findAnyDaemonSocket(config);
-    if (existingSock) {
-      try {
-        const conn = await connectAndAuthFromSocket(existingSock);
-        const resp = await sendCommand(conn, { cmd: 'list_raw' });
-        if (resp.ok) pages = JSON.parse(resp.result);
-      } catch { /* fallback to direct connection */ }
-    }
+    const includeSensitive = args.includes('--include-sensitive');
+    let pages = await pagesFromMatchingDaemon(config);
+    if (!pages) pages = await getPagesHttp(config);
     if (!pages) {
       const cdp = new CDP(config.commandTimeout);
-      await cdp.connect(getWsUrl());
+      await cdp.connect(await resolveWsUrl(config));
       pages = await getPages(cdp);
       cdp.close();
     }
-    writeFileSync(config._pagesCachePath, JSON.stringify(pages));
+    const outputPages = redactPages(pages, { includeSensitive });
+    writePagesCache(config._pagesCachePath, pages);
     audit('list', null, [], { ok: true }, config);
     printEnvelope({
       ok: true,
       command: cmd,
-      text: formatPageList(pages, config),
-      data: pages,
+      text: formatPageList(pages, config, { includeSensitive }),
+      data: outputPages,
     }, parsed.options);
     setTimeout(() => process.exit(0), 100);
     return;
@@ -284,9 +324,13 @@ async function main() {
 
   // Launch
   if (cmd === 'launch') {
-    const options = parseFlags(args, ['incognito', 'headless', 'insecure'], ['browser', 'browser-path', 'profile', 'url', 'proxy', 'chrome-arg']);
-    if (options['chrome-arg']) { options.chromeArgs = [options['chrome-arg']]; delete options['chrome-arg']; }
+    const options = parseFlags(args, ['incognito', 'headless', 'insecure', 'pipe', 'extension-tools', 'webmcp'], ['browser', 'browser-path', 'profile', 'url', 'proxy', 'chrome-arg']);
+    const chromeArgs = collectFlagValues(args, 'chrome-arg');
+    if (chromeArgs.length) options.chromeArgs = chromeArgs;
+    delete options['chrome-arg'];
     if (options['browser-path']) { options.browserPath = options['browser-path']; delete options['browser-path']; }
+    if (options['extension-tools']) { options.extensionTools = true; delete options['extension-tools']; }
+    if (options.webmcp) { options.webMcp = true; delete options.webmcp; }
     const result = await launchBrowser(options);
     printEnvelope({ ok: true, command: cmd, text: result }, parsed.options);
     return;
@@ -302,7 +346,7 @@ async function main() {
   // Incognito (no target -- creates a new context)
   if (cmd === 'incognito') {
     const cdp = new CDP(config.commandTimeout);
-    await cdp.connect(getWsUrl());
+    await cdp.connect(await resolveWsUrl(config));
     const result = await incognitoContext(cdp, args[0]);
     if (sessionName) {
       setSession(config, sessionName, {
@@ -319,7 +363,7 @@ async function main() {
   // Tab management (no daemon needed -- direct browser WebSocket)
   if (cmd === 'open' || cmd === 'close' || cmd === 'focus') {
     const cdp = new CDP(config.commandTimeout);
-    await cdp.connect(getWsUrl());
+    await cdp.connect(await resolveWsUrl(config));
     let result;
     if (cmd === 'open') {
       if (!args[0]) { console.error('Error: URL required'); process.exit(1); }
@@ -330,7 +374,7 @@ async function main() {
         const { targetId } = await cdp.send('Target.createTarget', { url: args[0], browserContextId });
         setSession(config, sessionName, { targetId, browserContextId, url: args[0], statePath });
         const pages = await getPages(cdp);
-        writeFileSync(config._pagesCachePath, JSON.stringify(pages));
+        writePagesCache(config._pagesCachePath, pages);
         result = `Session "${sessionName}" opened (targetId: ${targetId.slice(0, 8)}). URL: ${args[0]}`;
         if (await restoreSessionState(targetId, statePath).catch(() => false)) {
           result += `\nSession state restored from ${statePath}`;
@@ -378,7 +422,6 @@ async function main() {
 
   // Resolve prefix -> targetId
   let targetId;
-  if (sessionName) await getLivePages().catch(() => []);
   const daemonTargetIds = listDaemonSockets(config._socketDir).map(d => d.targetId);
   const daemonMatches = daemonTargetIds.filter(id => id.toUpperCase().startsWith(targetPrefix.toUpperCase()));
 
@@ -489,12 +532,24 @@ function parseFlags(args, booleanFlags, valueFlags) {
   return result;
 }
 
+function collectFlagValues(args, name) {
+  const values = [];
+  for (let index = 0; index < args.length; index++) {
+    if (args[index] === `--${name}` && args[index + 1]) values.push(args[++index]);
+    else if (args[index].startsWith(`--${name}=`)) values.push(args[index].slice(name.length + 3));
+  }
+  return values;
+}
+
 function parseGlobalArgs(argv) {
   const args = [];
   const options = {
     raw: false,
     json: false,
     sessionName: process.env.CHROMEX_SESSION || '',
+    cdpUrl: '',
+    cdpEndpoint: '',
+    cdpHeadersFile: '',
   };
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
@@ -516,6 +571,30 @@ function parseGlobalArgs(argv) {
     }
     if (arg.startsWith('--session=')) {
       options.sessionName = arg.slice('--session='.length);
+      continue;
+    }
+    if (arg === '--cdp-url') {
+      options.cdpUrl = argv[++i] || '';
+      continue;
+    }
+    if (arg.startsWith('--cdp-url=')) {
+      options.cdpUrl = arg.slice('--cdp-url='.length);
+      continue;
+    }
+    if (arg === '--cdp-endpoint') {
+      options.cdpEndpoint = argv[++i] || '';
+      continue;
+    }
+    if (arg.startsWith('--cdp-endpoint=')) {
+      options.cdpEndpoint = arg.slice('--cdp-endpoint='.length);
+      continue;
+    }
+    if (arg === '--cdp-headers-file') {
+      options.cdpHeadersFile = argv[++i] || '';
+      continue;
+    }
+    if (arg.startsWith('--cdp-headers-file=')) {
+      options.cdpHeadersFile = arg.slice('--cdp-headers-file='.length);
       continue;
     }
     args.push(arg);
@@ -546,10 +625,10 @@ function printEnvelope(envelope, options = {}) {
 
 async function getLivePages() {
   const cdp = new CDP(config.commandTimeout);
-  await cdp.connect(getWsUrl());
+  await cdp.connect(await resolveWsUrl(config));
   const pages = await getPages(cdp);
   cdp.close();
-  writeFileSync(config._pagesCachePath, JSON.stringify(pages));
+  writePagesCache(config._pagesCachePath, pages);
   return pages;
 }
 
@@ -558,7 +637,7 @@ async function getShowResult(records, annotate) {
   let connected = false;
   try {
     cdp = new CDP(config.commandTimeout);
-    await cdp.connect(getWsUrl());
+    await cdp.connect(await resolveWsUrl(config));
     connected = true;
     const pages = await getPages(cdp);
     return await showStr(cdp, records, pages, annotate, config);
@@ -588,7 +667,7 @@ async function closeSessionRecords(records, options = {}) {
   if (records.length === 0) return;
   const persist = options.persist !== false;
   const cdp = new CDP(config.commandTimeout);
-  await cdp.connect(getWsUrl());
+  await cdp.connect(await resolveWsUrl(config));
   for (const record of records) {
     if (!record?.targetId) continue;
     if (persist && record.name) await persistSessionState(record.targetId, record.name).catch(() => {});
@@ -637,20 +716,35 @@ async function connectAndAuthFromSocket(socketPath) {
     conn.on('connect', () => {
       if (!authToken) { resolve(conn); return; }
       let buf = '';
-      conn.on('data', (chunk) => {
+      const onData = chunk => {
         buf += chunk.toString();
         const idx = buf.indexOf('\n');
         if (idx === -1) return;
+        conn.off('data', onData);
         try {
           const resp = JSON.parse(buf.slice(0, idx));
           if (resp.ok) resolve(conn);
           else reject(new Error('Auth failed'));
         } catch { reject(new Error('Invalid response')); }
-      });
+      };
+      conn.on('data', onData);
       conn.write(JSON.stringify({ auth: authToken, id: 0 }) + '\n');
     });
     conn.on('error', reject);
   });
+}
+
+async function pagesFromMatchingDaemon(activeConfig) {
+  const expectedEndpoint = await resolveWsUrl(activeConfig).catch(() => null);
+  if (!expectedEndpoint) return null;
+  for (const daemon of listDaemonSockets(activeConfig._socketDir)) {
+    try {
+      const conn = await connectAndAuthFromSocket(daemon.socketPath);
+      const response = await sendCommand(conn, { cmd: 'list_raw' });
+      if (response.ok && response.data?.endpoint === expectedEndpoint) return JSON.parse(response.result);
+    } catch {}
+  }
+  return null;
 }
 
 main().catch(e => {

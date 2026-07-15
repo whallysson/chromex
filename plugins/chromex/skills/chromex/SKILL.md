@@ -1,12 +1,12 @@
 ---
 name: chromex
 description: "Interact with local Chromium browser session via CDP. Use when asked to inspect, debug, test, scrape, fill forms, take screenshots, or interact with a page open in Chrome/Brave/Edge. Only on explicit user approval. Triggers for: 'inspect page', 'take screenshot', 'fill form', 'check browser', 'debug page', 'web vitals', 'browser automation'."
-version: 1.6.0
+version: 1.8.0
 ---
 
 # Chromex -- Chrome DevTools Protocol CLI
 
-Zero-dependency CDP CLI for AI agents. Connects to Chrome/Brave/Edge via WebSocket. Per-tab persistent daemons, security hardened, 78 MCP tools.
+Zero-dependency CDP CLI for AI agents. Connects to Chrome, Brave, Edge, Chromium, and Vivaldi via WebSocket or a permission-protected shared pipe broker. Per-tab persistent daemons, security hardened, 85 MCP tools.
 
 ## Prerequisites
 
@@ -38,7 +38,8 @@ The `<target>` is a **unique** targetId prefix from `list`; copy the full prefix
 ### Pages & Browser
 
 ```bash
-chromex.mjs list                                    # list open pages
+chromex.mjs --version                                 # installed package version
+chromex.mjs list [--include-sensitive]              # list open pages
 chromex.mjs open    <url>                           # open new tab
 chromex.mjs -s auth open <url>                      # open named isolated session
 chromex.mjs sessions                                # list named sessions
@@ -51,11 +52,14 @@ chromex.mjs launch  --proxy socks5://host:port      # launch with proxy
 chromex.mjs launch  --insecure                      # ignore certificate errors
 chromex.mjs launch  --chrome-arg FLAG               # pass custom Chrome flag
 chromex.mjs launch  --browser-path PATH             # explicit Chromium executable
+chromex.mjs launch  --pipe                          # modal-free shared debugging pipe
+chromex.mjs launch  --extension-tools               # pipe mode with extension lifecycle APIs
+chromex.mjs launch  --webmcp                        # enable WebMCP in a visible supported Chrome
 chromex.mjs doctor                                  # diagnose CDP connectivity
 chromex.mjs incognito [url]                         # isolated context (no relaunch)
 chromex.mjs stop    [target]                        # stop daemon(s)
 chromex.mjs close-all                               # close named sessions
-chromex.mjs delete-data                             # delete named session data
+chromex.mjs delete-data <session>                   # delete named session data
 ```
 
 Named sessions persist storage state under `~/.chromex/session-data/<name>/storage-state.json` and restore it when reopened.
@@ -86,12 +90,17 @@ chromex.mjs shot    <target> --format=jpeg --quality=80  # JPEG/WebP with qualit
 chromex.mjs shot    <target> @e5               # screenshot of specific element by ref
 chromex.mjs net     <target>                    # list network requests (CDP tracked)
 chromex.mjs net     <target> <requestId>        # request detail: headers, timing, body
+chromex.mjs net     <target> <requestId> --include-sensitive
+chromex.mjs net     <target> <requestId> --body-limit=100000
 chromex.mjs perf    <target>                    # Core Web Vitals + memory + DOM
 chromex.mjs console <target> [ms]               # capture console output (live, default 5s)
 chromex.mjs console <target> list               # stored messages since daemon start
 chromex.mjs console <target> detail <id>        # message detail with stack trace
 chromex.mjs domsnapshot <target> [--styles]     # structured DOM with bounding rects
 chromex.mjs highlight <target> <sel|clear>      # highlight element with overlay
+chromex.mjs issues  <target> enable|list|clear|check-forms|disable
+chromex.mjs inspect <target> computed|matched|listeners|box|all <selector>
+chromex.mjs diagnose <target> [limit]           # prioritized runtime diagnosis
 chromex.mjs evidence <target> start checkout    # start evidence pack
 chromex.mjs evidence <target> mark "after login"
 chromex.mjs evidence <target> stop              # finalize replay + JSON pack
@@ -212,7 +221,11 @@ chromex.mjs inject   <target> <script|flags>    # JS injection on every page loa
 chromex.mjs download <target> allow|deny|reset  # download control
 chromex.mjs coverage <target> start|stop        # CSS/JS code coverage
 chromex.mjs trace    <target> start|stop [file] # performance trace
-chromex.mjs heap     <target> snapshot [file]   # heap snapshot (memory analysis)
+chromex.mjs heap     <target> <action> [args]   # heap capture and retaining-path analysis
+chromex.mjs screencast <target> start|stop|status|replay
+chromex.mjs extensions <target> <action> [args] # lifecycle, actions, targets, storage
+chromex.mjs third-party <target> list|execute   # page-exposed developer tools
+chromex.mjs webmcp <target> list|execute|cancel|disable|status
 chromex.mjs webauthn <target> enable|creds|dis  # virtual passkey authenticator
 ```
 

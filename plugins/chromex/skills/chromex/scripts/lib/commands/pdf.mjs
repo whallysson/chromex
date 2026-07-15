@@ -12,6 +12,6 @@ export async function pdfStr(cdp, sid, filePath) {
     preferCSSPageSize: true,
   }, sid);
 
-  writeFileSync(out, Buffer.from(data, 'base64'));
+  writeFileSync(out, Buffer.from(data, 'base64'), { mode: 0o600 });
   return `PDF saved to ${out}`;
 }

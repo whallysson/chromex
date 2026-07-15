@@ -1,6 +1,29 @@
 # Network Control
 
-Commands for throttling bandwidth, intercepting/mocking requests, and recording HTTP traffic.
+Commands for inspecting captured requests and bodies, filtering failures, throttling bandwidth, intercepting or mocking requests, and recording HTTP traffic.
+
+## Request History and Detail
+
+The per-tab daemon captures request lifecycle events from the moment it starts. List the most recent requests or narrow them before expanding one entry:
+
+```bash
+chromex net <target>
+chromex net <target> --url=/api/ --method=POST
+chromex net <target> --status=4xx --failed
+chromex net <target> --type=XHR --limit=20 --cursor=0
+chromex net <target> <requestId>
+```
+
+Request IDs accept an unambiguous prefix. Detail includes request and response headers, request payload, response body when still available in Chrome, DNS/connect/TLS/TTFB timing, initiator, protocol, cache state, transfer size, and failure metadata.
+
+Text bodies default to 2,000 characters. Expand only the call that needs more data:
+
+```bash
+chromex net <target> <requestId> --body-limit=100000
+chromex net <target> <requestId> --include-sensitive --body-limit=100000
+```
+
+The browser request is never modified by output redaction. Authorization, cookies, token-shaped URL parameters, body fields, and similar values are hidden from agent output by default and can be revealed only for an explicit live call.
 
 ## Network Throttling
 
@@ -57,21 +80,31 @@ chromex intercept <target> block "*.facebook.com/tr*"
 # Block images (test without images)
 chromex intercept <target> block "*.png"
 chromex intercept <target> block "*.jpg"
+
+# Fail matched requests with a specific CDP network reason
+chromex intercept <target> block "*.tracker.*" --abort=BlockedByClient
 ```
 
 ### Mock API Responses
 
 ```bash
 # Mock a REST API endpoint
-chromex intercept <target> mock "/api/user" '{"id":1,"name":"Test User","role":"admin"}'
+chromex intercept <target> mock "/api/user" --status=200 --content-type=application/json --body='{"id":1,"name":"Test User","role":"admin"}'
 
-# Mock an error response (the body is returned with 200 status)
-chromex intercept <target> mock "/api/data" '{"error":"Not found"}'
+# Mock an error response
+chromex intercept <target> mock "/api/data" --status=404 --body='{"error":"Not found"}'
 
-# Mock multiple endpoints
-chromex intercept <target> mock "/api/auth" '{"token":"abc123"}'
-chromex intercept <target> mock "/api/profile" '{"name":"Jane"}'
+# Add response headers and latency
+chromex intercept <target> mock "/api/slow" --status=503 --delay=750 --header='Retry-After: 1' --body='{"error":"Unavailable"}'
 ```
+
+### Remove Request Headers
+
+```bash
+chromex intercept <target> on "https://api.example.com/*" --remove-header=authorization,cookie
+```
+
+This modifies the real request and should be used only when the test explicitly needs a missing-header scenario. It is different from output redaction, which never changes browser traffic.
 
 ### Manage Rules
 
@@ -112,8 +145,8 @@ chromex click <target> "a.products"
 chromex waitfor <target> ".product-list"
 
 # Stop and save
-chromex har <target> stop ~/.chromex/har/session.har
-# Output: HAR saved to ~/.chromex/har/session.har (42 entries).
+chromex har <target> stop
+# Default: ~/.chromex/artifacts/<workspace>/har/network-<timestamp>.har
 ```
 
 ### What's Captured
@@ -123,6 +156,8 @@ Each HAR entry includes:
 - Response status, headers, MIME type
 - Timing (duration from request to response)
 - Transfer size
+
+HAR files are persistent evidence. Chromex redacts secret-shaped URLs and headers and replaces request post data with `<redacted>` before writing the file. Use live `net` detail with explicit `--include-sensitive` when an exact value is required.
 
 ### Use Cases
 

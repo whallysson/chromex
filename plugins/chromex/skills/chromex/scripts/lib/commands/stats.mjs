@@ -4,6 +4,7 @@
 import { writeFileSync } from 'fs';
 import { resolveArtifactPath } from '../artifacts.mjs';
 import { emptyState } from '../output.mjs';
+import { redactCommandArgs, redactText } from '../redaction.mjs';
 
 export class SessionStats {
   constructor() {
@@ -20,9 +21,9 @@ export class SessionStats {
     this.commands.set(cmd, entry);
 
     this.timeline.push({
-      cmd, args: args.slice(0, 3), // Truncate args for privacy
+      cmd, args: redactCommandArgs(cmd, args).slice(0, 3),
       startMs, endMs, duration: endMs - startMs,
-      ok, error: error?.substring(0, 100),
+      ok, error: error == null ? error : redactText(error, { maxLength: 100 }).slice(0, 100),
     });
   }
 }
@@ -76,7 +77,7 @@ export function statsStr(stats, full = false, exportPath = null) {
       commands: Object.fromEntries(stats.commands),
       timeline: stats.timeline,
     };
-    writeFileSync(resolvedExportPath, JSON.stringify(data, null, 2));
+    writeFileSync(resolvedExportPath, JSON.stringify(data, null, 2), { mode: 0o600 });
     lines.push('');
     lines.push(`Exported to: ${resolvedExportPath}`);
   }

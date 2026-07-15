@@ -2,7 +2,8 @@
 
 import { existsSync } from 'fs';
 import { CDP } from '../client.mjs';
-import { findDevToolsPortFile, getPages, getWsUrl } from '../browser.mjs';
+import { findDevToolsPortFile, findPipeMarker, getPages, resolveWsUrl } from '../browser.mjs';
+import { redactUrl } from '../redaction.mjs';
 
 function status(ok, label, detail) {
   return `${ok ? 'ok' : 'fail'}  ${label}${detail ? `: ${detail}` : ''}`;
@@ -25,21 +26,18 @@ export async function doctorStr(config) {
   }
 
   const portFile = findDevToolsPortFile();
-  lines.push(status(Boolean(portFile), 'DevToolsActivePort', portFile || 'not found'));
+  const pipeMarker = findPipeMarker();
+  const configured = config.cdpUrl || config.cdpEndpoint || process.env.CHROMEX_CDP_URL || process.env.CHROMEX_CDP_ENDPOINT;
+  lines.push(status(Boolean(portFile || pipeMarker || configured), 'endpointDiscovery', portFile || pipeMarker || configured || 'not found'));
 
   if (process.env.CDP_PORT_FILE) {
     lines.push(status(existsSync(process.env.CDP_PORT_FILE), 'CDP_PORT_FILE', process.env.CDP_PORT_FILE));
   }
 
-  if (!portFile) {
-    lines.push('hint: run `chromex launch --url https://example.com` or enable remote debugging in chrome://inspect/#remote-debugging');
-    return lines.join('\n');
-  }
-
   const cdp = new CDP(config.commandTimeout);
   try {
-    const wsUrl = getWsUrl();
-    lines.push(status(true, 'webSocketUrl', wsUrl.replace(/\/devtools\/browser\/.*/, '/devtools/browser/...')));
+    const wsUrl = await resolveWsUrl(config);
+    lines.push(status(true, 'cdpEndpoint', redactUrl(wsUrl).replace(/\/devtools\/browser\/.*/, '/devtools/browser/...')));
     await cdp.connect(wsUrl);
     lines.push(status(true, 'cdpConnect', 'connected'));
     const pages = await getPages(cdp);
@@ -47,6 +45,7 @@ export async function doctorStr(config) {
     if (pages.length === 0) lines.push('hint: open a page, then run `chromex list`');
   } catch (e) {
     lines.push(status(false, 'cdpConnect', e.message));
+    lines.push('hint: run `chromex launch --url https://example.com` or enable remote debugging in chrome://inspect/#remote-debugging');
   } finally {
     try { cdp.close(); } catch { /* Connection may not have opened. */ }
   }

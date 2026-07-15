@@ -8,7 +8,7 @@ export async function evalStr(cdp, sid, expression) {
     expression, returnByValue: true, awaitPromise: true,
   }, sid);
   if (result.exceptionDetails) {
-    throw new Error(result.exceptionDetails.text || result.exceptionDetails.exception?.description);
+    throw new Error(result.exceptionDetails.exception?.description || result.exceptionDetails.text || 'JavaScript evaluation failed');
   }
   const val = result.result.value;
   return typeof val === 'object' ? JSON.stringify(val, null, 2) : String(val ?? '');

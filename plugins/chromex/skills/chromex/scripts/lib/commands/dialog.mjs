@@ -26,7 +26,8 @@ export async function dialogStr(cdp, sid, action, text) {
 
 // Registra handler permanente que auto-aceita dialogs
 export function setupAutoDialog(cdp, sid) {
-  cdp.onEvent('Page.javascriptDialogOpening', async (params) => {
+  cdp.onEvent('Page.javascriptDialogOpening', async (params, message) => {
+    if (message?.sessionId && message.sessionId !== sid) return;
     try {
       await cdp.send('Page.handleJavaScriptDialog', {
         accept: true,

@@ -4,14 +4,26 @@
 [![Node.js 22+](https://img.shields.io/badge/node-%3E%3D22.0.0-brightgreen.svg)](https://nodejs.org/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-Chromex is a zero-dependency Chrome DevTools Protocol toolkit for AI agents. It connects directly to Chrome, Brave, Edge, Chromium, and Vivaldi through CDP, exposing a token-efficient CLI and an optional MCP server with 78 typed tools.
+Chromex is an agent-first browser automation and DevTools toolkit that connects directly to Chrome, Brave, Edge, Chromium, and Vivaldi through CDP. It exposes the complete capability set through a token-efficient CLI and 85 typed MCP tools, with zero runtime dependencies.
 
-Use Chromex when an agent needs to inspect pages, take screenshots, navigate, click, fill forms, read console/network activity, emulate devices, throttle network/CPU, export PDFs, or run browser diagnostics without pulling in heavy browser automation runtimes.
+Use Chromex when an agent needs to automate a real logged-in browser, inspect page and Application state, debug console/network failures, profile performance or memory, test extensions and WebMCP, or collect reproducible evidence without pulling in a heavy browser automation runtime.
+
+## Quick Start
+
+```bash
+npm install -g chromex-mcp
+chromex --version
+chromex launch --pipe --url https://example.com
+chromex list
+chromex snap <target> --refs
+```
+
+`launch --pipe` is the recommended path for repeatable AI sessions: it starts an isolated Chromex profile and avoids Chrome's recurring debugging approval prompt. Use the normal WebSocket mode only when access to an already-running personal browser is intentional.
 
 ## Why Chromex
 
 - **CLI-first for lower token usage**: terminal commands return compact plain text and avoid MCP tool-schema overhead.
-- **Optional MCP server**: 78 typed tools for Claude Code and other MCP clients when tool discovery, typed parameters, and inline screenshots matter more than token budget.
+- **Optional MCP server**: 85 typed tools in the full set, plus focused `core` and `devtools` toolsets for sessions where schema cost matters.
 - **No runtime dependencies**: Node.js 22+ built-ins only, including native WebSocket support.
 - **Agent-friendly page model**: accessibility snapshots, `@eN` refs, incremental diffs, query filters, auto-snapshots, and contextual hints.
 - **Persistent per-tab daemons**: one CDP session per tab, held open through an authenticated Unix socket.
@@ -28,10 +40,22 @@ Use Chromex when an agent needs to inspect pages, take screenshots, navigate, cl
 - Debug production behavior with console history, network request details, response bodies, HAR export, request blocking, API mocking, throttling, and offline mode.
 - Test browser conditions with device presets, viewport resizing, DPR, geolocation, timezone, locale, CPU throttling, incognito contexts, proxies, and custom Chrome flags.
 - Diagnose performance and quality with Core Web Vitals, transfer size, DOM/memory counters, Lighthouse audits, JS/CSS coverage, Chrome traces, and heap snapshots.
+- Inspect Browser Issues, computed and matched CSS, event listeners, box models, prioritized runtime diagnoses, CPU profiles, heap retaining paths, duplicate strings, and trace insights.
+- Capture bounded screencasts with a local replay, manage extensions in trusted pipe mode, and discover or execute WebMCP and page-exposed developer tools.
 - Build evidence packs with screenshots, snapshots, HTML, console, network timeline, action timeline, and replay HTML.
 - Validate modern browser flows such as passkey/WebAuthn registration and login, downloads, cookies, portable storage state, PDF export, and isolated profiles.
 - Inspect Application panel state from the terminal: origin quota, storage usage breakdown, Cache Storage entries/bodies, IndexedDB schemas/rows, and Service Worker registrations.
 - Turn `@eN` refs into locators and optional `chromex-test` action code.
+
+The CLI and the default MCP `full` toolset expose the same capability families. CLI commands group related operations into subcommands, while MCP presents 85 individually typed tools.
+
+| Capability | CLI | MCP `full` |
+|------------|-----|------------|
+| Input, navigation, forms, uploads, dialogs, and emulation | Yes | Yes |
+| Console, network, Application state, interception, HAR, and audits | Yes | Yes |
+| Browser Issues, CSS/listener/box inspection, and runtime diagnosis | Yes | Yes |
+| Web Vitals, CPU profiles, heap sampling, traces, and heap analysis | Yes | Yes |
+| Screencasts, extensions, page developer tools, and WebMCP | Yes | Yes |
 
 ## Positioning
 
@@ -77,10 +101,15 @@ chromex launch --browser brave --url https://example.com
 chromex launch --profile testing --url https://example.com
 chromex launch --incognito --browser chrome
 chromex launch --headless --url https://example.com
+chromex launch --pipe --url https://example.com
+chromex launch --extension-tools --url about:blank
+chromex launch --webmcp --url https://example.com
 chromex launch --browser-path "/Applications/Google Chrome Canary.app/Contents/MacOS/Google Chrome Canary"
 ```
 
 Named profiles are stored under `~/.chromex/profiles/` and keep test sessions isolated from your daily browser profile.
+
+`chromex launch --pipe` is the preferred mode for repeated AI sessions. It uses one permission-protected local Unix-socket broker over Chrome's remote-debugging pipe, avoids approval modals, and lets CLI and MCP clients share the same browser connection. `--extension-tools` implies pipe mode because Chrome restricts extension lifecycle APIs to trusted debugging sessions. WebMCP requires a visible supported Chrome build, so do not combine `--webmcp` with `--headless` when the page tools must execute.
 
 Chrome for Testing also works well with Chromex. Download it manually from Google's official Chrome for Testing channel, then point Chromex at the executable with `--browser-path` or `CHROMEX_BROWSER_PATH`. Chromex does not download or bundle a browser.
 
@@ -101,7 +130,9 @@ Important notes:
 
 - Without remote debugging enabled, Chromex cannot discover or control your open tabs.
 - The browser setting is usually persistent across restarts.
-- The first command that attaches to a tab may show an "Allow debugging" prompt. Accept it once for that tab; Chromex keeps the daemon session alive after that.
+- Chrome may show an "Allow debugging" prompt for each new DevTools WebSocket connection to a normal browser profile. This is browser security behavior, so reconnecting from a new CLI or agent process can show it again.
+- Per-tab daemons and the persistent MCP connection reduce reconnections, but they do not bypass Chrome's protection for a personal browser profile.
+- Use `chromex launch --pipe` with a Chromex-managed isolated profile when a modal-free persistent AI connection is required.
 
 If your browser uses a custom profile or a non-standard `DevToolsActivePort` location, set:
 
@@ -132,6 +163,15 @@ npm install -g chromex-mcp
 # Bun
 bun add -g chromex-mcp
 ```
+
+Verify which installation every terminal and agent session will use:
+
+```bash
+command -v chromex
+chromex --version
+```
+
+Cloning the repository does not replace an existing global installation. To test the current checkout directly, run `node bin/chromex.mjs`. To deliberately install the current checkout globally, run `npm install -g .` from the repository root and verify the path and version again.
 
 The package installs three binaries:
 
@@ -221,25 +261,48 @@ Global, available in all projects:
 
 ```bash
 # npm
-claude mcp add chromex -s user npx chromex-mcp@latest
+claude mcp add chromex --scope user -- npx -y chromex-mcp@latest
 
 # Bun
-claude mcp add chromex -s user bunx chromex-mcp@latest
+claude mcp add chromex --scope user -- bunx chromex-mcp@latest
 ```
 
 Project-only:
 
 ```bash
 # npm
-claude mcp add chromex npx chromex-mcp@latest
+claude mcp add chromex -- npx -y chromex-mcp@latest
 
 # Bun
-claude mcp add chromex bunx chromex-mcp@latest
+claude mcp add chromex -- bunx chromex-mcp@latest
 ```
 
-After setup, the MCP client can call tools such as `chromex_list`, `chromex_snapshot`, `chromex_click`, `chromex_fill`, `chromex_screenshot`, `chromex_console`, `chromex_network`, `chromex_app_summary`, `chromex_cache_entries`, `chromex_indexeddb_rows`, `chromex_sessions`, `chromex_show`, `chromex_locator`, `chromex_state`, and `chromex_evidence`.
+For MCP clients that accept a standard stdio configuration, point the client at the installed binary:
+
+```json
+{
+  "mcpServers": {
+    "chromex": {
+      "command": "chromex-mcp",
+      "args": []
+    }
+  }
+}
+```
+
+After setup, the MCP client can call tools such as `chromex_list`, `chromex_snapshot`, `chromex_click`, `chromex_fill`, `chromex_network`, `chromex_issues`, `chromex_inspect`, `chromex_diagnose`, `chromex_perf`, `chromex_trace`, `chromex_heap`, `chromex_screencast`, `chromex_extensions`, `chromex_third_party`, `chromex_webmcp`, `chromex_app_summary`, `chromex_cache_entries`, `chromex_indexeddb_rows`, and `chromex_evidence`.
 
 Tools that produce machine-readable data or artifacts also include MCP `structuredContent`, so agents can read paths and metadata without parsing the human text block.
+
+The default `full` toolset exposes all 85 tools. Use a focused toolset when the MCP client sends every schema into the model context:
+
+```bash
+chromex-mcp --toolset=core
+chromex-mcp --toolset=devtools
+CHROMEX_TOOLSET=full chromex-mcp
+```
+
+`core` exposes 24 navigation, inspection, input, form, and emulation tools. `devtools` exposes 26 browser-diagnostics, performance, trace, heap, Application, and audit tools. This selection changes discovery only; the complete CLI and the default MCP toolset retain every capability.
 
 ### Claude Code Auto-Approve
 
@@ -294,6 +357,7 @@ claude mcp remove chromex
 
 ```bash
 chromex list
+chromex list --include-sensitive
 chromex open "https://example.com"
 chromex -s auth open "https://example.com/login"
 chromex -s auth snap --refs
@@ -304,6 +368,9 @@ chromex focus <target>
 chromex launch --url https://example.com
 chromex launch --browser brave --incognito
 chromex launch --headless --url https://example.com
+chromex launch --pipe --url https://example.com
+chromex launch --extension-tools --url about:blank
+chromex launch --webmcp --url https://example.com
 chromex launch --browser-path /path/to/chrome --url https://example.com
 chromex doctor
 chromex incognito https://example.com
@@ -322,8 +389,14 @@ chromex shot <target> ~/.chromex/screenshots/full.png --full
 chromex shot <target> @e5
 chromex console <target> list
 chromex net <target>
+chromex net <target> <requestId> --include-sensitive
+chromex net <target> <requestId> --body-limit=100000
 chromex perf <target>
 chromex domsnapshot <target> --styles
+chromex issues <target> enable
+chromex issues <target> list
+chromex inspect <target> all "#checkout"
+chromex diagnose <target>
 chromex evidence <target> start checkout-flow
 chromex evidence <target> mark "after login"
 chromex evidence <target> stop
@@ -415,7 +488,13 @@ chromex inject <target> "window.DEBUG=true"
 chromex download <target> allow ~/.chromex/downloads
 chromex coverage <target> start
 chromex trace <target> start
+chromex trace <target> insights
 chromex heap <target> snapshot ~/.chromex/heap/heap.heapsnapshot
+chromex heap <target> summary
+chromex screencast <target> start --max-frames=120
+chromex extensions <target> list
+chromex third-party <target> list
+chromex webmcp <target> list
 chromex webauthn <target> enable
 ```
 
@@ -498,7 +577,7 @@ chromex -s auth click @e3
 chromex sessions
 chromex show --annotate
 chromex close-all
-chromex delete-data
+chromex delete-data auth
 ```
 
 `CHROMEX_SESSION=auth` can replace `-s auth` for shell scripts.
@@ -583,7 +662,24 @@ Chromex creates `~/.chromex/config.json` on first run:
   "idleTimeout": 1200000,
   "allowedDomains": [],
   "blockedDomains": [],
-  "blockedCdpMethods": ["Browser.close", "Storage.getCookies"],
+  "blockedCdpMethods": [
+    "Network.enable",
+    "Network.setRequestInterception",
+    "Network.setCacheDisabled",
+    "Page.setDocumentContent",
+    "Security.disable",
+    "Security.setIgnoreCertificateErrors",
+    "Fetch.enable",
+    "Fetch.fulfillRequest",
+    "Fetch.continueRequest",
+    "Browser.close",
+    "Browser.crashGpuProcess",
+    "Target.disposeBrowserContext",
+    "SystemInfo.getProcessInfo",
+    "Storage.clearDataForOrigin",
+    "Storage.getCookies",
+    "IndexedDB.requestData"
+  ],
   "auditLog": true,
   "socketAuth": true
 }
@@ -597,18 +693,21 @@ Recommended security practices:
 - Keep `auditLog` enabled and review `~/.chromex/audit.log` when needed.
 - Prefer `chromex launch --profile testing` for isolated browser state.
 
+Page URLs, network, console, extension-storage, third-party, and WebMCP outputs redact secret-shaped headers and fields by default. The browser still sends and receives the original values. Use CLI `--include-sensitive` or MCP `includeSensitive: true` only on the specific live call that needs exact values. Audit logs, page caches, stats, HAR, and structured evidence timelines, network data, and console data remain redacted even when a live response is revealed. Screenshots, screencasts, snapshots, HTML, traces, heap snapshots, and raw page content can still contain sensitive information and should be handled accordingly.
+
 See [docs/security.md](docs/security.md) for the full security model.
 
 ## How It Works
 
 ```text
 CLI or MCP client -> authenticated Unix socket -> per-tab daemon -> CDP WebSocket -> browser
+                                                        \-> pipe broker -> Chrome debugging pipe
 ```
 
-1. Chromex finds the browser DevTools endpoint from `DevToolsActivePort` or `CDP_PORT_FILE`.
+1. Chromex finds a browser DevTools endpoint or a Chromex pipe-broker marker.
 2. The first tab command starts a detached daemon for that tab.
 3. The daemon attaches once through CDP and keeps the session open.
-4. CLI and MCP commands talk to the daemon through an authenticated Unix socket.
+4. CLI and MCP commands talk to the daemon through an authenticated Unix socket; pipe mode multiplexes CDP through a second local socket restricted to the current OS user.
 5. Daemons exit after the configured idle timeout.
 
 See [docs/architecture.md](docs/architecture.md) for implementation details.
@@ -618,15 +717,16 @@ See [docs/architecture.md](docs/architecture.md) for implementation details.
 | Guide | Description |
 |-------|-------------|
 | [Getting Started](docs/getting-started.md) | Installation, browser setup, first commands. |
-| [Inspect and Debug](docs/inspect.md) | Screenshots, accessibility tree, refs, HTML, eval, network, performance, console. |
+| [Inspect and Debug](docs/inspect.md) | Screenshots, accessibility tree, refs, Browser Issues, CSS/listener inspection, diagnostics, performance, and console. |
 | [Navigate and Interact](docs/navigate.md) | Navigation, clicking, typing, scrolling, drag and drop, touch, dialogs. |
 | [Form Filling](docs/forms.md) | Fill, clear, select, check, upload, batch form examples. |
 | [Data Access](docs/data.md) | Cookies, localStorage, sessionStorage, Application state, Cache Storage, IndexedDB, Service Workers, PDF export. |
-| [Network Control](docs/network.md) | Throttling, interception, mocking, HAR recording. |
+| [Network Control](docs/network.md) | Live request history and bodies, filtering, redaction, throttling, interception, mocking, and HAR. |
 | [Device Emulation](docs/emulation.md) | Responsive testing, geolocation, timezone, CPU throttling. |
 | [Security](docs/security.md) | Domain filtering, CDP blocklist, audit log, best practices. |
-| [Advanced](docs/advanced.md) | Script injection, code coverage, tracing, heap snapshots, WebAuthn. |
+| [Advanced](docs/advanced.md) | CPU and heap profiles, trace insights, heap graph analysis, screencasts, extensions, page tools, WebMCP, and WebAuthn. |
 | [Architecture](docs/architecture.md) | Daemon model, connection modes, and file layout. |
+| [Troubleshooting](docs/troubleshooting.md) | Installation drift, connection failures, debugging prompts, Node warnings, extensions, and WebMCP. |
 
 ## Development
 

@@ -67,7 +67,7 @@ export async function shotStr(cdp, sid, filePath, fullPage = false, config, opti
     ? config.defaultScreenshotPath
     : null;
   const out = resolveArtifactPath(filePath || configuredPath || null, 'screenshots', `screenshot-${timestamp()}${ext}`);
-  writeFileSync(out, Buffer.from(data, 'base64'));
+  writeFileSync(out, Buffer.from(data, 'base64'), { mode: 0o600 });
 
   const lines = [out];
   const mode = options.refNum != null ? ` (element @e${options.refNum})` : fullPage ? ' (full page)' : ' (viewport only)';

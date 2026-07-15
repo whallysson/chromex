@@ -1,7 +1,7 @@
 {
   "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
   "name": "chromex",
-  "description": "Zero-dependency Chrome DevTools Protocol CLI for AI agents. 25+ commands, per-tab daemons, security hardened.",
+  "description": "Agent-first Chrome DevTools toolkit with a token-efficient CLI, 85 typed MCP tools, modal-free pipe transport, diagnostics, extensions, and WebMCP.",
   "owner": {
     "name": "Whallysson Avelino",
     "email": "whallysson.dev@gmail.com"
@@ -9,8 +9,8 @@
   "plugins": [
     {
       "name": "chromex",
-      "description": "Chrome/Brave/Edge automation via CDP. Screenshots, form filling, cookies, PDF, device emulation, Core Web Vitals.",
-      "version": "1.0.0",
+      "description": "Chrome, Brave, Edge, Chromium, and Vivaldi automation through CDP with full CLI/MCP capability parity, diagnostics, memory analysis, extensions, and WebMCP.",
+      "version": "1.8.0",
       "author": {
         "name": "Whallysson Avelino",
         "email": "whallysson.dev@gmail.com"

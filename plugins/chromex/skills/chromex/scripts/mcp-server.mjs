@@ -3,10 +3,10 @@
 // Reuses existing daemon infrastructure via IPC (same as CLI)
 
 import { createInterface } from 'readline';
-import { existsSync, readFileSync, writeFileSync } from 'fs';
+import { existsSync, readFileSync } from 'fs';
 import { loadConfig } from './lib/config.mjs';
 import { CDP } from './lib/client.mjs';
-import { getWsUrl, getPages, formatPageList } from './lib/browser.mjs';
+import { resolveWsUrl, getPages, getPagesHttp, formatPageList, redactPages, writePagesCache } from './lib/browser.mjs';
 import { audit } from './lib/security.mjs';
 import { resolvePrefix, listDaemonSockets } from './lib/utils.mjs';
 import { getOrStartTabDaemon, sendCommand, stopDaemons, checkTargetDomain } from './lib/ipc.mjs';
@@ -17,21 +17,28 @@ import { formatSessions, listSessions } from './lib/sessions.mjs';
 import { showStr } from './lib/commands/show.mjs';
 
 const config = loadConfig();
-const SERVER_INFO = { name: 'chromex', version: '1.6.0' };
+const PACKAGE_INFO = JSON.parse(readFileSync(new URL('../../../../../package.json', import.meta.url), 'utf8'));
+const SERVER_INFO = { name: 'chromex', version: PACKAGE_INFO.version };
+const LATEST_PROTOCOL_VERSION = '2025-11-25';
+const SUPPORTED_PROTOCOL_VERSIONS = new Set(['2024-11-05', '2025-03-26', '2025-06-18', LATEST_PROTOCOL_VERSION]);
 
 // ---- JSON-RPC helpers ----
 
 function send(obj) {
-  process.stdout.write(JSON.stringify(obj) + '\n');
+  pendingWrites++;
+  process.stdout.write(JSON.stringify(obj) + '\n', () => {
+    pendingWrites--;
+    maybeExit();
+  });
 }
 
 function ok(text) {
-  return { content: [{ type: 'text', text: text ?? '' }] };
+  return { content: [{ type: 'text', text: text ?? '' }], structuredContent: { text: text ?? '', data: null, artifacts: [] } };
 }
 
 function okStructured(text, structuredContent) {
   const result = { content: [{ type: 'text', text: text ?? '' }] };
-  if (structuredContent !== undefined) result.structuredContent = structuredContent;
+  result.structuredContent = normalizeStructuredContent(text, structuredContent);
   return result;
 }
 
@@ -42,12 +49,23 @@ function okWithImage(text, base64Data, mimeType = 'image/png', structuredContent
       { type: 'text', text },
     ],
   };
-  if (structuredContent !== undefined) result.structuredContent = structuredContent;
+  result.structuredContent = normalizeStructuredContent(text, structuredContent);
   return result;
 }
 
 function fail(text) {
-  return { content: [{ type: 'text', text }], isError: true };
+  return {
+    content: [{ type: 'text', text }],
+    structuredContent: normalizeStructuredContent(text, { data: { error: text } }),
+    isError: true,
+  };
+}
+
+function normalizeStructuredContent(text, value) {
+  if (value && ('text' in value || 'data' in value || 'artifacts' in value)) {
+    return { text: value.text ?? text ?? '', data: value.data ?? null, artifacts: value.artifacts || [] };
+  }
+  return { text: text ?? '', data: value ?? null, artifacts: [] };
 }
 
 // ---- Schema helpers ----
@@ -58,8 +76,18 @@ const DESTRUCTIVE = { readOnlyHint: false, destructiveHint: true, idempotentHint
 
 function tool(name, description, properties, required, annotations) {
   return {
-    name, description,
+    name, title: name.replace(/^chromex_/, '').replaceAll('_', ' '), description,
     inputSchema: { type: 'object', properties: properties || {}, required: required || [], additionalProperties: false },
+    outputSchema: {
+      type: 'object',
+      properties: {
+        text: { type: 'string' },
+        data: {},
+        artifacts: { type: 'array', items: { type: 'object' } },
+      },
+      required: ['text', 'data', 'artifacts'],
+      additionalProperties: false,
+    },
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true, ...annotations },
   };
 }
@@ -74,7 +102,7 @@ const TOOLS = [
   // == PAGES (no daemon) ==
   tool('chromex_list',
     'List open browser pages with unique target ID prefixes. Run this first to get target IDs.',
-    {}, [], RO),
+    { includeSensitive: { type: 'boolean', description: 'Reveal sensitive URL values only in this live response' } }, [], RO),
 
   tool('chromex_launch',
     'Launch browser with remote debugging enabled. Supports headless, proxy, insecure certs, and custom Chrome flags.',
@@ -87,6 +115,9 @@ const TOOLS = [
       headless: { type: 'boolean', description: 'Launch in headless mode (no UI)' },
       proxy: { type: 'string', description: 'Proxy server (e.g. socks5://localhost:1080)' },
       insecure: { type: 'boolean', description: 'Ignore certificate errors' },
+      pipe: { type: 'boolean', description: 'Use a shared remote debugging pipe without approval modals' },
+      extensionTools: { type: 'boolean', description: 'Enable Chrome unsafe extension debugging for extension tools' },
+      webMcp: { type: 'boolean', description: 'Enable the experimental WebMCP browser feature' },
       chromeArgs: { type: 'array', items: { type: 'string' }, description: 'Additional Chrome flags to pass through' },
     }, [], RW),
 
@@ -162,11 +193,24 @@ const TOOLS = [
     {
       target: P_TARGET,
       requestId: { type: 'string', description: 'Request ID for detail drill-down (from chromex_network listing)' },
+      url: { type: 'string', description: 'Case-insensitive URL substring filter for list' },
+      method: { type: 'string', description: 'HTTP method filter for list' },
+      status: { type: 'string', description: 'Status filter: exact code, 4xx, >=400, success, error, or pending' },
+      resourceType: { type: 'string', description: 'CDP resource type filter for list' },
+      failed: { type: 'boolean', description: 'Only failed requests and HTTP errors' },
+      limit: { type: 'number', minimum: 1, maximum: 200, description: 'Page size for list (default: 50)' },
+      cursor: { type: 'string', description: 'Cursor returned by a previous list response' },
+      bodyLimit: { type: 'number', minimum: 1, maximum: 1000000, description: 'Maximum request or response body characters for detail (default: 2000)' },
+      includeSensitive: { type: 'boolean', description: 'Reveal sensitive headers and URL values only in this response. Audit, stats, and evidence remain redacted.', default: false },
     }, ['target'], RO),
 
   tool('chromex_perf',
-    'Core Web Vitals (LCP, FCP, CLS, TTFB), navigation timing, memory, DOM metrics.',
-    { target: P_TARGET }, ['target'], RO),
+    'Core Web Vitals including INP, long tasks, long animation frames, layout shifts, navigation timing, CPU profiles, and heap allocation sampling.',
+    {
+      target: P_TARGET,
+      action: { type: 'string', enum: ['summary', 'start', 'stop', 'cpu-start', 'cpu-stop', 'heap-sampling-start', 'heap-sampling-stop'], description: 'Performance action', default: 'summary' },
+      filePath: { type: 'string', description: 'Output path for cpu-stop or heap-sampling-stop' },
+    }, ['target'], RO),
 
   tool('chromex_console',
     'Console messages. Default: live capture for duration. "list": stored messages since daemon start. "detail": full message with stack trace.',
@@ -175,6 +219,11 @@ const TOOLS = [
       action: { type: 'string', enum: ['capture', 'list', 'detail'], description: 'Action (default: capture)' },
       duration: { type: 'number', description: 'Capture duration in ms (default: 5000, for capture action)' },
       messageId: { type: 'number', description: 'Message ID for detail action' },
+      type: { type: 'string', description: 'Console type filter for list' },
+      query: { type: 'string', description: 'Case-insensitive message substring filter for list' },
+      limit: { type: 'number', minimum: 1, maximum: 200, description: 'Page size for list (default: 50)' },
+      cursor: { type: 'string', description: 'Cursor returned by a previous list response' },
+      includeSensitive: { type: 'boolean', description: 'Reveal sensitive values only in this live response' },
     }, ['target'], RO),
 
   tool('chromex_domsnapshot',
@@ -206,6 +255,29 @@ const TOOLS = [
       action: { type: 'string', enum: ['start', 'mark', 'stop', 'status', 'replay', 'capture'], description: 'Evidence action' },
       label: { type: 'string', description: 'Pack name for start/capture or mark label for mark/stop' },
     }, ['target', 'action'], RO),
+
+  tool('chromex_issues',
+    'Collect and inspect Chromium Audits issues including CORS, CSP, cookies, deprecations, mixed content, accessibility, and form issues.',
+    {
+      target: P_TARGET,
+      action: { type: 'string', enum: ['enable', 'list', 'clear', 'check-forms', 'disable'], description: 'Issue collection action', default: 'list' },
+    }, ['target'], RO),
+
+  tool('chromex_inspect',
+    'Inspect computed CSS, matched rules, event listeners, and box model for an element.',
+    {
+      target: P_TARGET,
+      action: { type: 'string', enum: ['computed', 'matched', 'listeners', 'box', 'all'], description: 'Inspection action', default: 'all' },
+      selector: { type: 'string', description: 'CSS selector' },
+      filter: { type: 'string', description: 'Optional CSS property name filter' },
+    }, ['target', 'selector'], RO),
+
+  tool('chromex_diagnose',
+    'Produce a prioritized runtime diagnosis from browser issues, failed requests, exceptions, console warnings, and performance counters.',
+    {
+      target: P_TARGET,
+      limit: { type: 'number', description: 'Maximum findings per category', default: 20 },
+    }, ['target'], RO),
 
   // == EVALUATE ==
   tool('chromex_eval',
@@ -642,19 +714,78 @@ const TOOLS = [
     }, ['target', 'action'], RW),
 
   tool('chromex_trace',
-    'Performance trace in chrome://tracing format.',
+    'Stream a performance trace to disk and derive actionable long-task, layout, GC, and layout-shift insights.',
     {
       target: P_TARGET,
-      action: { type: 'string', enum: ['start', 'stop'], description: 'Start or stop' },
-      arg: { type: 'string', description: 'For start: categories. For stop: output file path.' },
+      action: { type: 'string', enum: ['start', 'stop', 'insights', 'insight'], description: 'Trace action' },
+      arg: { type: 'string', description: 'Categories, output path, input trace path, or insight type depending on action' },
+      filePath: { type: 'string', description: 'Trace file for a specific insight action' },
     }, ['target', 'action'], RW),
 
   tool('chromex_heap',
-    'Heap snapshot for memory analysis.',
+    'Capture, inspect, compare, and trace retaining paths in Chrome heap snapshots.',
     {
       target: P_TARGET,
-      filePath: { type: 'string', description: 'Output path (default: /tmp/chromex-heap.heapsnapshot)' },
+      action: { type: 'string', enum: ['snapshot', 'close', 'summary', 'details', 'class-nodes', 'dominators', 'duplicate-strings', 'edges', 'retainers', 'retaining-paths', 'compare'], description: 'Heap action (default: snapshot)' },
+      filePath: { type: 'string', description: 'Snapshot path' },
+      otherFilePath: { type: 'string', description: 'Second snapshot path for compare' },
+      node: { type: ['string', 'number'], description: 'Node index, #index, or id:<id>' },
+      className: { type: 'string', description: 'Class name fragment for class-nodes' },
+      limit: { type: 'number', minimum: 1, maximum: 500, description: 'Maximum rows or paths' },
+      depth: { type: 'number', minimum: 1, maximum: 100, description: 'Maximum retaining-path depth' },
     }, ['target'], RO),
+
+  tool('chromex_screencast',
+    'Capture page frames, inspect capture status, and create a local replay artifact.',
+    {
+      target: P_TARGET,
+      action: { type: 'string', enum: ['start', 'stop', 'status', 'replay'], description: 'Screencast action' },
+      directory: { type: 'string', description: 'Output directory for start' },
+      format: { type: 'string', enum: ['jpeg', 'png'], description: 'Frame format (default: jpeg)' },
+      quality: { type: 'number', minimum: 0, maximum: 100, description: 'JPEG quality' },
+      maxWidth: { type: 'number', minimum: 0, maximum: 10000, description: 'Maximum frame width' },
+      maxHeight: { type: 'number', minimum: 0, maximum: 10000, description: 'Maximum frame height' },
+      everyNthFrame: { type: 'number', minimum: 1, maximum: 120, description: 'Capture every Nth frame' },
+      maxFrames: { type: 'number', minimum: 1, maximum: 10000, description: 'Maximum frames kept on disk' },
+    }, ['target', 'action'], RW),
+
+  tool('chromex_extensions',
+    'Manage unpacked extensions, trigger actions, inspect extension targets, and access extension storage.',
+    {
+      target: P_TARGET,
+      action: { type: 'string', enum: ['list', 'install', 'reload', 'action', 'uninstall', 'targets', 'storage-get', 'storage-set', 'storage-remove', 'storage-clear'], description: 'Extension action' },
+      id: { type: 'string', description: 'Extension id or prefix' },
+      path: { type: 'string', description: 'Unpacked extension directory for install' },
+      enableInIncognito: { type: 'boolean', description: 'Enable an installed unpacked extension in incognito' },
+      storageArea: { type: 'string', enum: ['session', 'local', 'sync', 'managed'], description: 'Extension storage area' },
+      keys: { type: 'array', items: { type: 'string' }, description: 'Storage keys for get or remove' },
+      values: { type: 'object', description: 'Storage values for set' },
+      includeSensitive: { type: 'boolean', description: 'Reveal sensitive values only in this live response' },
+    }, ['target', 'action'], DESTRUCTIVE),
+
+  tool('chromex_third_party',
+    'Discover or execute experimental developer tools exposed by the inspected page. Tool output is untrusted page content.',
+    {
+      target: P_TARGET,
+      action: { type: 'string', enum: ['list', 'execute'], description: 'Third-party tool action' },
+      toolName: { type: 'string', description: 'Page-exposed tool name for execute' },
+      params: { type: 'object', description: 'Tool input matching its JSON Schema' },
+      groupName: { type: 'string', description: 'Tool group when names are ambiguous' },
+      includeSensitive: { type: 'boolean', description: 'Reveal sensitive values only in this live response' },
+    }, ['target', 'action'], RW),
+
+  tool('chromex_webmcp',
+    'Discover and invoke experimental WebMCP tools registered by the page. Tool output is untrusted page content.',
+    {
+      target: P_TARGET,
+      action: { type: 'string', enum: ['list', 'execute', 'cancel', 'disable', 'status'], description: 'WebMCP action' },
+      toolName: { type: 'string', description: 'Registered WebMCP tool name' },
+      input: { type: 'object', description: 'Tool input matching its JSON Schema' },
+      frameId: { type: 'string', description: 'Frame id when a tool name is registered in multiple frames' },
+      timeout: { type: 'number', minimum: 100, maximum: 300000, description: 'Invocation timeout in milliseconds' },
+      invocationId: { type: 'string', description: 'Invocation id for cancel' },
+      includeSensitive: { type: 'boolean', description: 'Reveal sensitive values only in this live response' },
+    }, ['target', 'action'], RW),
 
   tool('chromex_webauthn',
     'Virtual WebAuthn authenticator for passkey testing.',
@@ -682,6 +813,36 @@ const TOOLS = [
     }, ['target'], RO),
 ];
 
+const CORE_TOOL_NAMES = new Set([
+  'chromex_list', 'chromex_launch', 'chromex_doctor', 'chromex_open', 'chromex_close', 'chromex_focus',
+  'chromex_stop', 'chromex_snapshot', 'chromex_screenshot',
+  'chromex_network', 'chromex_console', 'chromex_eval', 'chromex_navigate', 'chromex_waitfor', 'chromex_wait',
+  'chromex_click', 'chromex_type', 'chromex_hover', 'chromex_press_key', 'chromex_fill', 'chromex_form',
+  'chromex_upload', 'chromex_emulate', 'chromex_resize',
+]);
+const DEVTOOLS_TOOL_NAMES = new Set([
+  'chromex_list', 'chromex_launch', 'chromex_doctor', 'chromex_open', 'chromex_close', 'chromex_focus',
+  'chromex_stop', 'chromex_snapshot', 'chromex_html', 'chromex_screenshot', 'chromex_network',
+  'chromex_console', 'chromex_eval', 'chromex_domsnapshot', 'chromex_highlight', 'chromex_issues',
+  'chromex_inspect', 'chromex_diagnose', 'chromex_perf', 'chromex_coverage', 'chromex_trace',
+  'chromex_heap', 'chromex_screencast', 'chromex_app_summary', 'chromex_service_workers', 'chromex_audit',
+]);
+
+function selectedToolset() {
+  const flag = process.argv.find(arg => arg.startsWith('--toolset='));
+  const splitIndex = process.argv.indexOf('--toolset');
+  const value = flag?.slice('--toolset='.length) || (splitIndex >= 0 ? process.argv[splitIndex + 1] : null) || process.env.CHROMEX_TOOLSET || 'full';
+  if (!['core', 'devtools', 'full'].includes(value)) throw new Error(`Unknown toolset: ${value}`);
+  return value;
+}
+
+function activeTools() {
+  const selected = selectedToolset();
+  if (selected === 'core') return TOOLS.filter(item => CORE_TOOL_NAMES.has(item.name));
+  if (selected === 'devtools') return TOOLS.filter(item => DEVTOOLS_TOOL_NAMES.has(item.name));
+  return TOOLS;
+}
+
 // ---- Tool name -> daemon {cmd, args} mapping ----
 
 function toolToCmd(name, p) {
@@ -705,17 +866,40 @@ function toolToCmd(name, p) {
       if (p.quality != null) a.push(`--quality=${p.quality}`);
       return { cmd: 'shot', args: a };
     }
-    case 'chromex_network':    return { cmd: 'net', args: p.requestId ? [p.requestId] : [] };
-    case 'chromex_perf':       return { cmd: 'perf', args: [] };
+    case 'chromex_network': {
+      const args = p.requestId ? [p.requestId] : [];
+      if (p.url) args.push(`--url=${p.url}`);
+      if (p.method) args.push(`--method=${p.method}`);
+      if (p.status) args.push(`--status=${p.status}`);
+      if (p.resourceType) args.push(`--type=${p.resourceType}`);
+      if (p.failed) args.push('--failed');
+      if (p.limit != null) args.push(`--limit=${p.limit}`);
+      if (p.cursor) args.push(`--cursor=${p.cursor}`);
+      if (p.bodyLimit != null) args.push(`--body-limit=${p.bodyLimit}`);
+      if (p.includeSensitive) args.push('--include-sensitive');
+      return { cmd: 'net', args };
+    }
+    case 'chromex_perf':       return { cmd: 'perf', args: [p.action || 'summary', ...(p.filePath ? [p.filePath] : [])] };
     case 'chromex_console': {
-      if (p.action === 'list') return { cmd: 'console', args: ['list'] };
-      if (p.action === 'detail') return { cmd: 'console', args: ['detail', String(p.messageId ?? '')] };
-      return { cmd: 'console', args: p.duration != null ? [String(p.duration)] : [] };
+      const args = p.action === 'list'
+        ? ['list']
+        : p.action === 'detail'
+          ? ['detail', String(p.messageId ?? '')]
+          : p.duration != null ? [String(p.duration)] : [];
+      if (p.type) args.push(`--type=${p.type}`);
+      if (p.query) args.push(`--query=${p.query}`);
+      if (p.limit != null) args.push(`--limit=${p.limit}`);
+      if (p.cursor) args.push(`--cursor=${p.cursor}`);
+      if (p.includeSensitive) args.push('--include-sensitive');
+      return { cmd: 'console', args };
     }
     case 'chromex_domsnapshot': return { cmd: 'domsnapshot', args: p.styles ? ['--styles'] : [] };
     case 'chromex_highlight':  return { cmd: 'highlight', args: [p.selector] };
     case 'chromex_locator':    return { cmd: 'locator', args: [p.selector, p.format ? `--format=${p.format}` : '--format=chromex-test'] };
     case 'chromex_evidence':   return { cmd: 'evidence', args: [p.action, ...(p.label ? [p.label] : [])] };
+    case 'chromex_issues':     return { cmd: 'issues', args: [p.action || 'list'] };
+    case 'chromex_inspect':    return { cmd: 'inspect', args: [p.action || 'all', p.selector, ...(p.filter ? [p.filter] : [])] };
+    case 'chromex_diagnose':   return { cmd: 'diagnose', args: p.limit != null ? [String(p.limit)] : [] };
 
     // Evaluate
     case 'chromex_eval':       return { cmd: 'eval', args: [p.expression] };
@@ -806,8 +990,68 @@ function toolToCmd(name, p) {
     case 'chromex_inject':     return { cmd: 'inject', args: p.arg ? [p.action, p.arg] : [p.action] };
     case 'chromex_download':   return { cmd: 'download', args: p.path ? [p.action, p.path] : [p.action] };
     case 'chromex_coverage':   return { cmd: 'coverage', args: [p.action] };
-    case 'chromex_trace':      return { cmd: 'trace', args: p.arg ? [p.action, p.arg] : [p.action] };
-    case 'chromex_heap':       return { cmd: 'heap', args: p.filePath ? ['snapshot', p.filePath] : ['snapshot'] };
+    case 'chromex_trace':      return { cmd: 'trace', args: [p.action, ...(p.arg ? [p.arg] : []), ...(p.filePath ? [p.filePath] : [])] };
+    case 'chromex_heap': {
+      const action = p.action || 'snapshot';
+      const a = [action];
+      if (p.filePath) a.push(p.filePath);
+      if (action === 'compare' && p.otherFilePath) a.push(p.otherFilePath);
+      if (action === 'class-nodes' && p.className != null) a.push(String(p.className));
+      if (['details', 'dominators', 'edges', 'retainers', 'retaining-paths'].includes(action) && p.node != null) a.push(String(p.node));
+      if (p.limit != null) a.push(String(p.limit));
+      if (action === 'retaining-paths' && p.depth != null) a.push(String(p.depth));
+      return { cmd: 'heap', args: a };
+    }
+    case 'chromex_screencast': {
+      const a = [p.action];
+      if (p.directory) a.push(p.directory);
+      if (p.format) a.push(`--format=${p.format}`);
+      if (p.quality != null) a.push(`--quality=${p.quality}`);
+      if (p.maxWidth != null) a.push(`--max-width=${p.maxWidth}`);
+      if (p.maxHeight != null) a.push(`--max-height=${p.maxHeight}`);
+      if (p.everyNthFrame != null) a.push(`--every-nth-frame=${p.everyNthFrame}`);
+      if (p.maxFrames != null) a.push(`--max-frames=${p.maxFrames}`);
+      return { cmd: 'screencast', args: a };
+    }
+    case 'chromex_extensions': {
+      const a = [p.action];
+      if (p.action === 'install') {
+        if (p.path) a.push(p.path);
+        if (p.enableInIncognito) a.push('--incognito');
+      } else if (p.action.startsWith('storage-')) {
+        if (p.id) a.push(p.id);
+        if (p.storageArea) a.push(p.storageArea);
+        if (p.action === 'storage-set' && p.values) a.push(JSON.stringify(p.values));
+        if (['storage-get', 'storage-remove'].includes(p.action) && p.keys?.length) a.push(JSON.stringify(p.keys));
+        if (p.includeSensitive) a.push('--include-sensitive');
+      } else if (p.id) {
+        a.push(p.id);
+      }
+      return { cmd: 'extensions', args: a };
+    }
+    case 'chromex_third_party': {
+      const a = [p.action];
+      if (p.action === 'execute') {
+        if (p.toolName) a.push(p.toolName);
+        a.push(JSON.stringify(p.params || {}));
+        if (p.groupName) a.push(p.groupName);
+        if (p.includeSensitive) a.push('--include-sensitive');
+      }
+      return { cmd: 'third-party', args: a };
+    }
+    case 'chromex_webmcp': {
+      const a = [p.action];
+      if (p.action === 'execute') {
+        if (p.toolName) a.push(p.toolName);
+        a.push(JSON.stringify(p.input || {}));
+        if (p.frameId) a.push(`--frame=${p.frameId}`);
+        if (p.timeout != null) a.push(`--timeout=${p.timeout}`);
+        if (p.includeSensitive) a.push('--include-sensitive');
+      } else if (p.action === 'cancel' && p.invocationId) {
+        a.push(p.invocationId);
+      }
+      return { cmd: 'webmcp', args: a };
+    }
     case 'chromex_webauthn':   return { cmd: 'webauthn', args: [p.action] };
     case 'chromex_audit':      return { cmd: 'audit', args: [p.categories || '', p.device || '', p.reportPath || ''].filter(Boolean) };
     case 'chromex_stats': {
@@ -827,11 +1071,16 @@ function toolToCmd(name, p) {
 // Auto-populate page cache if missing
 async function ensurePageCache() {
   if (existsSync(config._pagesCachePath)) return;
+  const httpPages = await getPagesHttp(config);
+  if (httpPages) {
+    writePagesCache(config._pagesCachePath, httpPages);
+    return;
+  }
   const cdp = new CDP(config.commandTimeout);
-  await cdp.connect(getWsUrl());
+  await cdp.connect(await resolveWsUrl(config));
   const pages = await getPages(cdp);
   cdp.close();
-  writeFileSync(config._pagesCachePath, JSON.stringify(pages));
+  writePagesCache(config._pagesCachePath, pages);
 }
 
 async function resolveTarget(prefix) {
@@ -858,14 +1107,27 @@ const NO_DAEMON = new Set([
 ]);
 
 // Helper: connect to browser, execute, disconnect
-async function withBrowser(fn) {
-  const cdp = new CDP(config.commandTimeout);
-  await cdp.connect(getWsUrl());
-  try {
-    return await fn(cdp);
-  } finally {
-    cdp.close();
+let browserClient = null;
+let browserClientPromise = null;
+
+async function getBrowserClient() {
+  if (browserClient) return browserClient;
+  if (!browserClientPromise) {
+    browserClientPromise = (async () => {
+      const cdp = new CDP(config.commandTimeout);
+      await cdp.connect(await resolveWsUrl(config));
+      cdp.onClose(() => {
+        if (browserClient === cdp) browserClient = null;
+      });
+      browserClient = cdp;
+      return cdp;
+    })().finally(() => { browserClientPromise = null; });
   }
+  return browserClientPromise;
+}
+
+async function withBrowser(fn) {
+  return fn(await getBrowserClient());
 }
 
 async function executeTool(name, params) {
@@ -874,16 +1136,29 @@ async function executeTool(name, params) {
   // -- No-daemon commands (direct browser CDP) --
 
   if (name === 'chromex_list') {
+    const httpPages = await getPagesHttp(config);
+    if (httpPages) {
+      const outputPages = redactPages(httpPages, { includeSensitive: !!params.includeSensitive });
+      writePagesCache(config._pagesCachePath, httpPages);
+      audit('list', null, [], { ok: true }, config);
+      return okStructured(formatPageList(httpPages, config, { includeSensitive: !!params.includeSensitive }), { data: outputPages });
+    }
     return withBrowser(async (cdp) => {
       const pages = await getPages(cdp);
-      writeFileSync(config._pagesCachePath, JSON.stringify(pages));
+      const outputPages = redactPages(pages, { includeSensitive: !!params.includeSensitive });
+      writePagesCache(config._pagesCachePath, pages);
       audit('list', null, [], { ok: true }, config);
-      return ok(formatPageList(pages, config));
+      return okStructured(formatPageList(pages, config, { includeSensitive: !!params.includeSensitive }), { data: outputPages });
     });
   }
 
   if (name === 'chromex_launch') {
     const result = await launchBrowser(params);
+    const connectingClient = browserClientPromise;
+    if (connectingClient) await connectingClient.catch(() => {});
+    const previousClient = browserClient;
+    browserClient = null;
+    previousClient?.close();
     return ok(result);
   }
 
@@ -990,18 +1265,18 @@ async function handleMessage(msg) {
     case 'initialize':
       return {
         result: {
-          protocolVersion: params?.protocolVersion || '2025-03-26',
-          capabilities: { tools: {} },
+          protocolVersion: SUPPORTED_PROTOCOL_VERSIONS.has(params?.protocolVersion) ? params.protocolVersion : LATEST_PROTOCOL_VERSION,
+          capabilities: { tools: { listChanged: false } },
           serverInfo: SERVER_INFO,
         },
       };
 
     case 'tools/list':
-      return { result: { tools: TOOLS } };
+      return { result: { tools: activeTools() } };
 
     case 'tools/call': {
       const toolName = params?.name;
-      if (!toolName || !TOOLS.find(t => t.name === toolName)) {
+      if (!toolName || !activeTools().find(t => t.name === toolName)) {
         return { error: { code: -32602, message: `Unknown tool: ${toolName}` } };
       }
       try {
@@ -1025,9 +1300,13 @@ async function handleMessage(msg) {
 const rl = createInterface({ input: process.stdin, terminal: false });
 let pending = 0;
 let closing = false;
+let pendingWrites = 0;
 
 function maybeExit() {
-  if (closing && pending === 0) process.exit(0);
+  if (closing && pending === 0 && pendingWrites === 0) {
+    browserClient?.close();
+    process.exit(0);
+  }
 }
 
 rl.on('line', async (line) => {

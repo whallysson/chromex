@@ -96,14 +96,14 @@ async function collectEvidence(cdp, rows, annotate, config) {
 async function capturePreview(cdp, sessionId, row) {
   const { data } = await cdp.send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false }, sessionId);
   const filePath = resolveArtifactPath(null, 'dashboard', `${artifactName(row)}.png`);
-  writeFileSync(filePath, Buffer.from(data, 'base64'));
+  writeFileSync(filePath, Buffer.from(data, 'base64'), { mode: 0o600 });
   return { type: 'dashboard', path: filePath, relativePath: dashboardRelativePath(filePath) };
 }
 
 async function captureSnapshot(cdp, sessionId, row) {
   const result = await snapshotStr(cdp, sessionId, true, true, null, 0, null, { boxes: true });
   const filePath = resolveArtifactPath(null, 'snapshots', `${artifactName(row)}.yml`);
-  writeFileSync(filePath, result.text);
+  writeFileSync(filePath, result.text, { mode: 0o600 });
   return { type: 'snapshots', path: filePath, relativePath: dashboardRelativePath(filePath) };
 }
 

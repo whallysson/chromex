@@ -2,6 +2,7 @@
 
 import { writeFileSync } from 'fs';
 import { resolveArtifactPath, timestamp } from '../artifacts.mjs';
+import { redactHeaders, redactUrl } from '../redaction.mjs';
 
 let recording = false;
 const entries = [];
@@ -20,7 +21,8 @@ export async function harStr(cdp, sid, action, filePath) {
       await cdp.send('Network.enable', {}, sid);
       recording = true;
 
-      const off1 = cdp.onEvent('Network.requestWillBeSent', (params) => {
+      const off1 = cdp.onEvent('Network.requestWillBeSent', (params, message) => {
+        if (message?.sessionId && message.sessionId !== sid) return;
         requestMap.set(params.requestId, {
           requestId: params.requestId,
           url: params.request.url,
@@ -32,7 +34,8 @@ export async function harStr(cdp, sid, action, filePath) {
         });
       });
 
-      const off2 = cdp.onEvent('Network.responseReceived', (params) => {
+      const off2 = cdp.onEvent('Network.responseReceived', (params, message) => {
+        if (message?.sessionId && message.sessionId !== sid) return;
         const req = requestMap.get(params.requestId);
         if (req) {
           req.status = params.response.status;
@@ -43,7 +46,8 @@ export async function harStr(cdp, sid, action, filePath) {
         }
       });
 
-      const off3 = cdp.onEvent('Network.loadingFinished', (params) => {
+      const off3 = cdp.onEvent('Network.loadingFinished', (params, message) => {
+        if (message?.sessionId && message.sessionId !== sid) return;
         const req = requestMap.get(params.requestId);
         if (req) {
           req.endTime = params.timestamp;
@@ -72,14 +76,14 @@ export async function harStr(cdp, sid, action, filePath) {
             time: e.endTime && e.startTime ? Math.round((e.endTime - e.startTime) * 1000) : 0,
             request: {
               method: e.method,
-              url: e.url,
-              headers: Object.entries(e.headers || {}).map(([n, v]) => ({ name: n, value: v })),
-              postData: e.postData ? { mimeType: 'application/x-www-form-urlencoded', text: e.postData } : undefined,
+              url: redactUrl(e.url),
+              headers: Object.entries(redactHeaders(e.headers || {})).map(([n, v]) => ({ name: n, value: v })),
+              postData: e.postData ? { mimeType: 'application/x-www-form-urlencoded', text: '<redacted>' } : undefined,
             },
             response: {
               status: e.status || 0,
               statusText: e.statusText || '',
-              headers: Object.entries(e.responseHeaders || {}).map(([n, v]) => ({ name: n, value: v })),
+              headers: Object.entries(redactHeaders(e.responseHeaders || {})).map(([n, v]) => ({ name: n, value: v })),
               content: { size: e.encodedDataLength || 0, mimeType: e.mimeType || '' },
             },
             cache: {},
@@ -92,7 +96,7 @@ export async function harStr(cdp, sid, action, filePath) {
       };
 
       const out = resolveArtifactPath(filePath || null, 'har', `network-${timestamp()}.har`);
-      writeFileSync(out, JSON.stringify(har, null, 2));
+      writeFileSync(out, JSON.stringify(har, null, 2), { mode: 0o600 });
       return `HAR saved to ${out} (${entries.length} entries).`;
     }
 

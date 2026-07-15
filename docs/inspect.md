@@ -1,6 +1,6 @@
 # Inspect & Debug
 
-Commands for reading page content, taking screenshots, and measuring performance.
+Commands for reading page content, taking screenshots, inspecting DevTools state, prioritizing runtime failures, and measuring performance.
 
 ## Screenshots
 
@@ -173,36 +173,81 @@ chromex evalraw <target> "DOM.enable"
 
 > See the full [CDP Protocol Reference](https://chromedevtools.github.io/devtools-protocol/) for all available methods.
 
+## Browser Issues
+
+Collect issues reported by Chrome's Audits domain, including cookie, mixed-content, CORS, attribution, deprecation, and form signals supported by the active Chromium build.
+
+```bash
+chromex issues <target> enable
+chromex issues <target> list
+chromex issues <target> check-forms
+chromex issues <target> clear
+chromex issues <target> disable
+```
+
+Collection starts automatically when `list` or `check-forms` is called. Keep the same tab daemon alive while reproducing the problem so events remain available.
+
+## CSS, Listeners, and Box Model
+
+Inspect a selected element without constructing raw CDP calls:
+
+```bash
+chromex inspect <target> computed "#checkout"
+chromex inspect <target> computed "#checkout" color
+chromex inspect <target> matched "#checkout"
+chromex inspect <target> listeners "#checkout"
+chromex inspect <target> box "#checkout"
+chromex inspect <target> all "#checkout"
+```
+
+`computed` and `matched` accept an optional property-name filter. `all` returns computed styles, matched rules, event listeners, and content/padding/border/margin geometry in one call.
+
+## Prioritized Runtime Diagnosis
+
+`diagnose` combines Browser Issues, failed or HTTP-error requests, console errors and warnings, plus selected runtime counters from the current daemon window.
+
+```bash
+chromex issues <target> enable
+chromex diagnose <target>
+chromex diagnose <target> 50
+```
+
+The result is a prioritization aid, not a synthetic score for release approval. Reproduce the flow first so the daemon has captured its network, console, and issue events.
+
 ## Network Performance
 
-View resource timing entries (all resources loaded by the page).
+View requests captured since the per-tab daemon started. On a fresh non-daemon fallback, Chromex can return browser resource timing entries instead.
 
 ```bash
 chromex net <target>
+chromex net <target> --failed --status=4xx
+chromex net <target> --url=/api/ --method=POST --limit=20
+chromex net <target> <requestId>
+chromex net <target> <requestId> --body-limit=100000
 ```
 
 **Output:**
 ```
-  145ms       1234B  script    https://example.com/app.js
-   89ms       5678B  css       https://example.com/style.css
-  234ms      12345B  img       https://example.com/hero.png
-   12ms          0B  fetch     https://api.example.com/data
+STATUS  METHOD  ID              URL
+   200  GET     1234.1          https://example.com/app.js
+   503  POST    1234.2          https://example.com/api/checkout
 ```
 
-Columns: duration, transfer size, initiator type, URL.
+Request detail includes method, URL, status, MIME type, request and response headers, request body, response body when Chrome still has it, DNS/connect/TLS/TTFB timing, initiator, protocol, cache state, encoded length, and failure data. Sensitive values are redacted by default; use `--include-sensitive` only for the exact live call that requires them.
 
 ## Performance Metrics
 
 Get Core Web Vitals and detailed performance data.
 
 ```bash
-chromex perf <target>
+chromex perf <target> summary
 ```
 
 **Output:**
 ```
 ## Core Web Vitals
 LCP:  1250ms  (IMG) [GOOD]
+INP:  120ms [GOOD]
 FCP:  890ms [GOOD]
 CLS:  0.05 [GOOD]
 TTFB: 120ms [GOOD]
@@ -227,7 +272,7 @@ Frames:        2
 Listeners:     89
 ```
 
-Each Core Web Vital is rated: `[GOOD]`, `[NEEDS IMPROVEMENT]`, or `[POOR]` based on Google's thresholds.
+The summary also reports long tasks, long animation frames, layout shifts, and event timing counts. Metrics are rated `[GOOD]`, `[NEEDS IMPROVEMENT]`, or `[POOR]` using the thresholds encoded by Chromex. See [Advanced Features](./advanced.md) for explicit collection windows, CPU profiles, allocation sampling, traces, and heap analysis.
 
 ## Console Capture
 
@@ -242,6 +287,10 @@ chromex console <target> 10000
 
 # Listen for 30 seconds
 chromex console <target> 30000
+
+# Query stored daemon history
+chromex console <target> list --type=error --query=checkout --limit=20
+chromex console <target> detail <messageId>
 ```
 
 **Output:**
@@ -251,7 +300,7 @@ chromex console <target> 30000
 [14:23:46.789] ERR  Failed to fetch: NetworkError
 ```
 
-> **Tip:** Open the console capture, then interact with the page in another terminal to see what logs are produced.
+Stored detail includes stack frames when Chrome provides them. Message bodies and stack URLs are redacted by default; pass `--include-sensitive` only for a specific live inspection. For an explicit timed capture, start the command and interact with the page from another terminal.
 
 ## DOM Snapshot
 

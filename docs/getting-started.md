@@ -2,27 +2,69 @@
 
 ## Installation
 
-### Option 1: Claude Code Plugin (recommended)
+### Option 1: Global CLI and MCP package
 
 ```bash
-# Add the marketplace
-/plugin marketplace add github:whallysson/chromex
+npm install -g chromex-mcp
+chromex --version
+command -v chromex
+```
 
-# Install the plugin
+Bun can also install the published package globally:
+
+```bash
+bun add -g chromex-mcp
+```
+
+The package installs `chromex`, its `chromex-cli` alias, and the `chromex-mcp` stdio server.
+
+### Option 2: Claude Code Plugin
+
+Run these commands inside Claude Code:
+
+```text
+/plugin marketplace add github:whallysson/chromex
 /plugin install chromex
 ```
 
-Once installed, Claude Code will automatically use chromex when you ask it to interact with your browser.
+The plugin teaches Claude Code when and how to use Chromex. The globally installed CLI remains useful for direct terminal calls and other AI agents.
 
-### Option 2: Standalone CLI
+### Option 3: Current source checkout
 
 ```bash
 git clone https://github.com/whallysson/chromex.git
 cd chromex
-chmod +x skills/chromex/scripts/chromex.mjs
+bun install
+node bin/chromex.mjs --version
+```
 
-# Create an alias for convenience
-alias chromex="node $(pwd)/skills/chromex/scripts/chromex.mjs"
+Cloning or updating the repository does not replace an existing global installation. Use `node bin/chromex.mjs` to test the checkout directly. To deliberately make the checkout global, run:
+
+```bash
+npm install -g .
+command -v chromex
+chromex --version
+```
+
+### Optional MCP setup
+
+For Claude Code user scope:
+
+```bash
+claude mcp add chromex --scope user -- npx -y chromex-mcp@latest
+```
+
+For clients that accept a standard stdio configuration:
+
+```json
+{
+  "mcpServers": {
+    "chromex": {
+      "command": "chromex-mcp",
+      "args": []
+    }
+  }
+}
 ```
 
 ## Connecting to Your Browser
@@ -49,6 +91,15 @@ chromex launch --url https://example.com
 # Launch with a named profile (isolated from your main browser)
 chromex launch --profile testing
 
+# Launch through one shared Chrome pipe without approval prompts
+chromex launch --pipe --url https://example.com
+
+# Enable trusted extension lifecycle APIs through pipe mode
+chromex launch --extension-tools --url about:blank
+
+# Enable WebMCP in a visible supported Chrome build
+chromex launch --webmcp --url https://example.com
+
 # Combine flags
 chromex launch --browser chrome --incognito --url https://example.com
 
@@ -65,7 +116,7 @@ Chrome for Testing is supported as a manual browser option: download it from Goo
 3. Toggle the switch to enable remote debugging
 4. Run `chromex list` to verify the connection
 
-> **Note:** With Method B, Chrome will show an "Allow debugging" modal the first time you access each tab. The daemon keeps the session alive so you only see this once per tab.
+> **Note:** With Method B on Chrome 144 or newer, a new DevTools connection can show an "Allow debugging" modal even if an earlier connection was approved. Per-tab daemons and the persistent MCP client reduce reconnects, but Chrome does not persist this permission. Use `chromex launch --pipe` with a Chromex-managed profile for modal-free repeated AI sessions.
 
 If browser discovery fails, run:
 
@@ -117,6 +168,13 @@ The CLI always tells you if a prefix is ambiguous — just use more characters.
 |----------|-------------|
 | `CDP_PORT_FILE` | Override the DevToolsActivePort file path. Useful for custom browser profiles or non-standard setups. |
 | `CHROMEX_BROWSER_PATH` | Default executable path used by `chromex launch` when your browser is not in a standard location. |
+| `CHROMEX_CDP_URL` | HTTP(S), WS(S), or local Unix endpoint override. |
+| `CHROMEX_CDP_ENDPOINT` | Named endpoint from `cdpEndpoints` in `~/.chromex/config.json`. |
+| `CHROMEX_CDP_HEADERS_FILE` | JSON headers for authenticated HTTP endpoint discovery. |
+| `CHROMEX_SESSION` | Default named session, equivalent to `-s <name>`. |
+| `CHROMEX_TOOLSET` | MCP discovery set: `full`, `core`, or `devtools`. |
+| `CHROMEX_ARTIFACT_ROOT` | Override the default `~/.chromex/artifacts/<workspace>/` root. |
+| `CHROMEX_NO_OPEN` | Prevent dashboards and local replay artifacts from opening automatically. |
 
 ```bash
 # Connect to a browser launched with a custom profile
@@ -126,12 +184,13 @@ chromex list
 
 ## Next Steps
 
-- [Inspect & Debug](./inspect.md) — screenshots, accessibility tree, refs, HTML, eval, network, performance, console
+- [Inspect & Debug](./inspect.md) — screenshots, accessibility tree, refs, Browser Issues, CSS/listener inspection, diagnostics, performance, console
 - [Navigate & Interact](./navigate.md) — navigation, clicking, typing, scrolling, drag & drop, touch, dialogs
 - [Form Filling](./forms.md) — fill, clear, select, check, upload, batch fill with examples
 - [Data Access](./data.md) — cookies, localStorage, sessionStorage, Application state, Cache Storage, IndexedDB, Service Workers, PDF export
-- [Network Control](./network.md) — throttling, interception, mocking, HAR recording
+- [Network Control](./network.md) — request history and bodies, filters, redaction, throttling, interception, mocking, HAR
 - [Device Emulation](./emulation.md) — responsive testing, geolocation, timezone, CPU throttling
 - [Security](./security.md) — domain filtering, CDP blocklist, audit log, best practices
-- [Advanced](./advanced.md) — script injection, code coverage, tracing, heap snapshots, WebAuthn
+- [Advanced](./advanced.md) — CPU and heap profiles, trace insights, heap graph analysis, screencasts, extensions, page tools, WebMCP, WebAuthn
 - [Architecture](./architecture.md) — how it works: daemon model, connection modes, file layout
+- [Troubleshooting](./troubleshooting.md) — version drift, CDP connection failures, debugging prompts, Node warnings, extensions, WebMCP

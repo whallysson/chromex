@@ -137,9 +137,9 @@ To disable (not recommended):
 Every command is logged to `~/.chromex/audit.log`:
 
 ```json
-{"ts":"2026-03-15T14:23:45.123Z","cmd":"eval","target":"6BE827FA1234","args":["document.title"],"ok":true}
+{"ts":"2026-03-15T14:23:45.123Z","cmd":"eval","target":"6BE827FA1234","args":["<redacted>"],"ok":true}
 {"ts":"2026-03-15T14:23:46.456Z","cmd":"nav","target":"6BE827FA1234","args":["https://example.com"],"ok":true}
-{"ts":"2026-03-15T14:23:47.789Z","cmd":"evalraw","target":"6BE827FA1234","args":["Browser.close"],"ok":false}
+{"ts":"2026-03-15T14:23:47.789Z","cmd":"evalraw","target":"6BE827FA1234","args":["<redacted>"],"ok":false}
 ```
 
 To disable:
@@ -148,6 +148,16 @@ To disable:
   "auditLog": false
 }
 ```
+
+## Sensitive Output Redaction
+
+Page URLs, request and response headers, textual bodies, console messages, extension storage, third-party developer tools, and WebMCP output redact secret-shaped values by default. The original values still reach the browser and application under test.
+
+Use `--include-sensitive` in the CLI or `includeSensitive: true` in MCP only for the live response that requires exact values. Network detail bodies default to 2,000 characters and can be expanded up to 1,000,000 with `--body-limit=N` or MCP `bodyLimit`.
+
+The reveal flag does not propagate into the audit log, page cache, stats, HAR, or structured evidence timeline, network, and console files. Visual and raw artifacts such as screenshots, screencasts, snapshots, HTML, traces, and heap snapshots can contain sensitive page data and remain the operator's responsibility.
+
+Pipe mode uses a Unix socket restricted to the current OS user. Per-tab daemon sockets additionally use the random token described above.
 
 ## Timeouts
 
@@ -164,3 +174,5 @@ To disable:
 3. **Keep `socketAuth` enabled** — prevents other local processes from hijacking sessions
 4. **Review audit logs** periodically — detect unexpected command patterns
 5. **Use named profiles** (`launch --profile test`) to isolate test sessions from your real browser data
+6. **Use pipe mode** (`launch --pipe`) for modal-free repeated agent access instead of bypassing protections on a personal profile
+7. **Reveal sensitive output per call only** and avoid placing raw page artifacts in shared logs or repositories

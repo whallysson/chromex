@@ -1,5 +1,6 @@
 // Segurança: domain filtering, CDP method blocklist, audit log
-import { appendFileSync } from 'fs';
+import { appendFileSync, chmodSync, existsSync } from 'fs';
+import { redactCommandArgs } from './redaction.mjs';
 
 export function checkDomain(url, config) {
   if (!url) return null;
@@ -39,10 +40,11 @@ export function audit(cmd, target, args, result, config) {
     ts: new Date().toISOString(),
     cmd,
     target: target?.slice(0, 12) || null,
-    args: (args || []).map(a => typeof a === 'string' && a.length > 120 ? a.slice(0, 120) + '...' : a).slice(0, 3),
+    args: redactCommandArgs(cmd, args).slice(0, 3),
     ok: result?.ok ?? true,
   };
   try {
-    appendFileSync(config._auditLogPath, JSON.stringify(entry) + '\n');
+    appendFileSync(config._auditLogPath, JSON.stringify(entry) + '\n', { mode: 0o600 });
+    if (existsSync(config._auditLogPath)) chmodSync(config._auditLogPath, 0o600);
   } catch { /* falha no audit não deve quebrar o comando */ }
 }

@@ -65,7 +65,8 @@ export async function waitLifecycleStr(cdp, sid, event, timeoutMs, config) {
   const start = Date.now();
   return new Promise((resolve, reject) => {
     let settled = false;
-    const off = cdp.onEvent('Page.lifecycleEvent', (params) => {
+    const off = cdp.onEvent('Page.lifecycleEvent', (params, message) => {
+      if (message?.sessionId && message.sessionId !== sid) return;
       if (params.name === cdpEvent && !settled) {
         settled = true;
         off();

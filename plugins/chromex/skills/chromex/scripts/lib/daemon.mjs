@@ -1,9 +1,9 @@
 // Per-tab daemon: keeps the CDP session open and receives commands through a Unix socket
-import { readFileSync, writeFileSync, unlinkSync, existsSync } from 'fs';
+import { readFileSync, writeFileSync, unlinkSync, existsSync, chmodSync } from 'fs';
 import { randomBytes } from 'crypto';
 import net from 'net';
 import { CDP } from './client.mjs';
-import { getWsUrl, getPages, formatPageList } from './browser.mjs';
+import { resolveWsUrl, getPages, formatPageList } from './browser.mjs';
 import { audit } from './security.mjs';
 import { sockPath } from './utils.mjs';
 
@@ -13,13 +13,13 @@ import { evalStr, evalRawStr } from './commands/evaluate.mjs';
 import { shotStr } from './commands/screenshot.mjs';
 import { navStr } from './commands/navigate.mjs';
 import { htmlStr } from './commands/html.mjs';
-import { netStr, netListStr, netDetailStr } from './commands/network.mjs';
+import { netStr, netListResult, netDetailResult } from './commands/network.mjs';
 import { clickStr, clickXyStr, typeStr, loadAllStr, waitForStr } from './commands/interact.mjs';
 import { fillStr, clearStr, selectStr, checkStr, formStr } from './commands/form.mjs';
 import { scrollStr } from './commands/scroll.mjs';
 import { cookiesStr } from './commands/cookies.mjs';
 import { pdfStr } from './commands/pdf.mjs';
-import { consoleStr, consoleListStr, consoleDetailStr } from './commands/console.mjs';
+import { consoleStr, consoleListResult, consoleDetailResult } from './commands/console.mjs';
 import { storageStr } from './commands/storage.mjs';
 import { emulateStr, resizeStr } from './commands/emulate.mjs';
 import { pressKeyStr } from './commands/keyboard.mjs';
@@ -53,6 +53,13 @@ import { appStr, cacheStr, idbStr, serviceWorkersStr } from './commands/app.mjs'
 import { stateStr } from './commands/state.mjs';
 import { actionCodeStr, locatorStr } from './commands/locator.mjs';
 import { evidenceStr, recordEvidenceAction } from './commands/evidence.mjs';
+import { issuesStr } from './commands/issues.mjs';
+import { inspectStr } from './commands/inspect.mjs';
+import { diagnoseStr } from './commands/diagnose.mjs';
+import { screencastStr } from './commands/screencast.mjs';
+import { extensionsStr } from './commands/extensions.mjs';
+import { thirdPartyStr } from './commands/third-party.mjs';
+import { createWebMcpState, webMcpStr } from './commands/webmcp.mjs';
 import { writeTextArtifact } from './artifacts.mjs';
 import { generateHints, renderHints, isRefMapFresh } from './hints.mjs';
 import { sleep } from './utils.mjs';
@@ -80,6 +87,7 @@ export function getOrCreateToken(config) {
   if (!config.socketAuth) return null;
   const tokenPath = config._tokenPath;
   if (existsSync(tokenPath)) {
+    try { chmodSync(tokenPath, 0o600); } catch {}
     return readFileSync(tokenPath, 'utf8').trim();
   }
   const token = randomBytes(32).toString('hex');
@@ -93,7 +101,7 @@ export async function runDaemon(targetId, config) {
 
   const cdp = new CDP(config.commandTimeout);
   try {
-    await cdp.connect(getWsUrl());
+    await cdp.connect(await resolveWsUrl(config));
   } catch (e) {
     process.stderr.write(`Daemon: cannot connect to Chrome: ${e.message}\n`);
     process.exit(1);
@@ -143,22 +151,31 @@ export async function runDaemon(targetId, config) {
   let lastFilledRef = null;
   const sessionStats = new SessionStats();
   const evidenceState = { active: null, last: null };
+  const issuesState = { enabled: false, items: [] };
+  const screencastState = { active: null, last: null };
+  const webMcpState = createWebMcpState(cdp, sessionId);
 
   // Network request tracking (CDP Network domain) for detail drill-down
   const networkRequests = new Map();
   try {
     await cdp.send('Network.enable', {}, sessionId);
-    cdp.onEvent('Network.requestWillBeSent', (params) => {
+    cdp.onEvent('Network.requestWillBeSent', (params, message) => {
+      if (message?.sessionId && message.sessionId !== sessionId) return;
       networkRequests.set(params.requestId, {
         url: params.request.url,
         method: params.request.method,
         requestHeaders: params.request.headers,
         type: params.type,
+        documentURL: params.documentURL,
+        initiator: params.initiator,
+        hasPostData: params.request.hasPostData,
+        postData: params.request.postData,
         ts: params.timestamp,
       });
       if (networkRequests.size > 500) networkRequests.delete(networkRequests.keys().next().value);
     });
-    cdp.onEvent('Network.responseReceived', (params) => {
+    cdp.onEvent('Network.responseReceived', (params, message) => {
+      if (message?.sessionId && message.sessionId !== sessionId) return;
       const r = networkRequests.get(params.requestId);
       if (r) {
         r.status = params.response.status;
@@ -166,18 +183,47 @@ export async function runDaemon(targetId, config) {
         r.responseHeaders = params.response.headers;
         r.timing = params.response.timing;
         r.mimeType = params.response.mimeType;
+        r.protocol = params.response.protocol;
+        r.remoteIPAddress = params.response.remoteIPAddress;
+        r.fromDiskCache = params.response.fromDiskCache;
+      }
+    });
+    cdp.onEvent('Network.loadingFinished', (params, message) => {
+      if (message?.sessionId && message.sessionId !== sessionId) return;
+      const r = networkRequests.get(params.requestId);
+      if (r) {
+        r.completed = true;
+        r.encodedDataLength = params.encodedDataLength;
+      }
+    });
+    cdp.onEvent('Network.loadingFailed', (params, message) => {
+      if (message?.sessionId && message.sessionId !== sessionId) return;
+      const r = networkRequests.get(params.requestId);
+      if (r) {
+        r.completed = true;
+        r.failed = true;
+        r.failure = {
+          errorText: params.errorText,
+          canceled: params.canceled,
+          blockedReason: params.blockedReason,
+          corsErrorStatus: params.corsErrorStatus,
+        };
       }
     });
   } catch { /* Network domain unavailable */ }
 
   // Console message tracking for list/detail drill-down
   const consoleMessages = [];
+  let consoleMessageId = 0;
+  const appendConsoleMessage = message => {
+    consoleMessages.push({ id: consoleMessageId++, ts: Date.now(), ...message });
+    if (consoleMessages.length > 1000) consoleMessages.splice(0, 500);
+  };
   try {
     await cdp.send('Runtime.enable', {}, sessionId);
-    cdp.onEvent('Runtime.consoleAPICalled', (params) => {
-      consoleMessages.push({
-        id: consoleMessages.length,
-        ts: Date.now(),
+    cdp.onEvent('Runtime.consoleAPICalled', (params, message) => {
+      if (message?.sessionId && message.sessionId !== sessionId) return;
+      appendConsoleMessage({
         type: params.type,
         args: (params.args || []).map(a => {
           if (a.type === 'string') return a.value;
@@ -189,9 +235,36 @@ export async function runDaemon(targetId, config) {
         }),
         stackTrace: params.stackTrace,
       });
-      if (consoleMessages.length > 1000) consoleMessages.splice(0, 500);
+    });
+    cdp.onEvent('Runtime.exceptionThrown', (params, message) => {
+      if (message?.sessionId && message.sessionId !== sessionId) return;
+      appendConsoleMessage({
+        type: 'exception',
+        args: [params.exceptionDetails?.exception?.description || params.exceptionDetails?.text || 'Unhandled exception'],
+        stackTrace: params.exceptionDetails?.stackTrace,
+        exceptionDetails: params.exceptionDetails,
+      });
+    });
+    await cdp.send('Log.enable', {}, sessionId).catch(() => {});
+    cdp.onEvent('Log.entryAdded', ({ entry }, message) => {
+      if (message?.sessionId && message.sessionId !== sessionId) return;
+      appendConsoleMessage({
+        type: entry.level === 'error' ? 'error' : entry.level === 'warning' ? 'warning' : entry.source || 'log',
+        args: [entry.text],
+        stackTrace: entry.stackTrace,
+        source: entry.source,
+        url: entry.url,
+        lineNumber: entry.lineNumber,
+      });
     });
   } catch { /* Runtime domain unavailable */ }
+
+  cdp.onEvent('Audits.issueAdded', ({ issue }, message) => {
+    if (message?.sessionId && message.sessionId !== sessionId) return;
+    if (!issue) return;
+    issuesState.items.push(issue);
+    if (issuesState.items.length > 1000) issuesState.items.splice(0, 500);
+  });
 
   async function handleCommand({ cmd, args }) {
     resetIdle();
@@ -238,7 +311,7 @@ export async function runDaemon(targetId, config) {
         }
         case 'list_raw': {
           const pages = await getPages(cdp);
-          result = JSON.stringify(pages);
+          result = { text: JSON.stringify(pages), data: { endpoint: cdp.wsUrl } };
           break;
         }
         case 'snap': case 'snapshot': {
@@ -326,10 +399,21 @@ export async function runDaemon(targetId, config) {
           break;
         }
         case 'net': case 'network':
-          if (args[0]) {
-            result = await netDetailStr(cdp, sessionId, args[0], networkRequests);
-          } else if (networkRequests.size > 0) {
-            result = netListStr(networkRequests);
+          if (args.find(arg => !arg.startsWith('--'))) {
+            const bodyLimit = args.find(arg => arg.startsWith('--body-limit='))?.slice('--body-limit='.length);
+            result = await netDetailResult(cdp, sessionId, args.find(arg => !arg.startsWith('--')), networkRequests, { includeSensitive: args.includes('--include-sensitive'), bodyLimit });
+          } else if (networkRequests.size > 0 || args.some(arg => arg.startsWith('--') && arg !== '--include-sensitive')) {
+            const option = name => args.find(arg => arg.startsWith(`--${name}=`))?.slice(name.length + 3);
+            result = netListResult(networkRequests, {
+              includeSensitive: args.includes('--include-sensitive'),
+              failed: args.includes('--failed'),
+              url: option('url'),
+              method: option('method'),
+              status: option('status'),
+              type: option('type'),
+              limit: option('limit'),
+              cursor: option('cursor'),
+            });
           } else {
             result = await netStr(cdp, sessionId);
           }
@@ -388,12 +472,20 @@ export async function runDaemon(targetId, config) {
           break;
         case 'console': {
           const sub = args[0]?.toLowerCase();
+          const option = name => args.find(arg => arg.startsWith(`--${name}=`))?.slice(name.length + 3);
+          const consoleOptions = {
+            includeSensitive: args.includes('--include-sensitive'),
+            type: option('type'),
+            query: option('query'),
+            limit: option('limit'),
+            cursor: option('cursor'),
+          };
           if (sub === 'list') {
-            result = consoleListStr(consoleMessages);
+            result = consoleListResult(consoleMessages, consoleOptions);
           } else if (sub === 'detail' && args[1]) {
-            result = consoleDetailStr(consoleMessages, args[1]);
+            result = consoleDetailResult(consoleMessages, args[1], consoleOptions);
           } else {
-            result = await consoleStr(cdp, sessionId, args[0]);
+            result = await consoleStr(cdp, sessionId, args.find(arg => /^\d+$/.test(arg)) || 5000, consoleOptions);
           }
           break;
         }
@@ -433,7 +525,16 @@ export async function runDaemon(targetId, config) {
           result = await emulateStr(cdp, sessionId, args[0]);
           break;
         case 'perf':
-          result = await perfStr(cdp, sessionId);
+          result = await perfStr(cdp, sessionId, args[0] || 'summary', args[1]);
+          break;
+        case 'issues':
+          result = await issuesStr(cdp, sessionId, issuesState, args[0]);
+          break;
+        case 'inspect':
+          result = await inspectStr(cdp, sessionId, args[0], args[1], args[2]);
+          break;
+        case 'diagnose':
+          result = await diagnoseStr(cdp, sessionId, { issues: issuesState, consoleMessages, networkRequests }, args[0]);
           break;
         // --- Tier 1: Quick Wins ---
         case 'wait':
@@ -493,10 +594,22 @@ export async function runDaemon(targetId, config) {
           break;
         // --- Tier 3: Pro Features ---
         case 'trace':
-          result = await traceStr(cdp, sessionId, args[0], args[1]);
+          result = await traceStr(cdp, sessionId, args[0], args[1], args[2]);
           break;
         case 'heap':
-          result = await heapStr(cdp, sessionId, args[0], args[1]);
+          result = await heapStr(cdp, sessionId, args[0], ...args.slice(1));
+          break;
+        case 'screencast':
+          result = await screencastStr(cdp, sessionId, screencastState, args[0], ...args.slice(1));
+          break;
+        case 'extensions':
+          result = await extensionsStr(cdp, targetId, args[0], ...args.slice(1));
+          break;
+        case 'third-party':
+          result = await thirdPartyStr(cdp, sessionId, args[0], ...args.slice(1));
+          break;
+        case 'webmcp':
+          result = await webMcpStr(cdp, sessionId, webMcpState, args[0], ...args.slice(1));
           break;
         case 'webauthn':
           result = await webauthnStr(cdp, sessionId, args[0]);
@@ -655,4 +768,7 @@ export async function runDaemon(targetId, config) {
 
   try { unlinkSync(sp); } catch { /* socket does not exist */ }
   server.listen(sp);
+  server.on('listening', () => {
+    try { chmodSync(sp, 0o600); } catch {}
+  });
 }

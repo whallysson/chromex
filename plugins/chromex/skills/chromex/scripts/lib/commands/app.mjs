@@ -309,12 +309,14 @@ async function collectServiceWorkers(cdp, sid, origin) {
 
   const registrations = new Map();
   const versions = [];
-  const offRegistrations = cdp.onEvent('ServiceWorker.workerRegistrationUpdated', (params) => {
+  const offRegistrations = cdp.onEvent('ServiceWorker.workerRegistrationUpdated', (params, message) => {
+    if (message?.sessionId && message.sessionId !== sid) return;
     for (const registration of params.registrations || []) {
       registrations.set(registration.registrationId, registration);
     }
   });
-  const offVersions = cdp.onEvent('ServiceWorker.workerVersionUpdated', (params) => {
+  const offVersions = cdp.onEvent('ServiceWorker.workerVersionUpdated', (params, message) => {
+    if (message?.sessionId && message.sessionId !== sid) return;
     for (const version of params.versions || []) versions.push(version);
   });
 
@@ -417,7 +419,8 @@ async function storageKeyInfo(cdp, sid) {
 async function storageBuckets(cdp, sid) {
   const storageKey = await storageKeyInfo(cdp, sid);
   const buckets = new Map();
-  const offBucket = cdp.onEvent('Storage.storageBucketCreatedOrUpdated', (params) => {
+  const offBucket = cdp.onEvent('Storage.storageBucketCreatedOrUpdated', (params, message) => {
+    if (message?.sessionId && message.sessionId !== sid) return;
     const info = params.bucketInfo;
     if (!info?.bucket || info.bucket.storageKey !== storageKey) return;
     buckets.set(info.id || `${info.bucket.storageKey}:${info.bucket.name || 'default'}`, info);

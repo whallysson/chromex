@@ -70,6 +70,12 @@ export async function getOrStartTabDaemon(targetId, config) {
   const child = spawn(process.execPath, [scriptPath, '_daemon', targetId], {
     detached: true,
     stdio: 'ignore',
+    env: {
+      ...process.env,
+      ...(config.cdpUrl ? { CHROMEX_CDP_URL: config.cdpUrl } : {}),
+      ...(config.cdpEndpoint ? { CHROMEX_CDP_ENDPOINT: config.cdpEndpoint } : {}),
+      ...(config.cdpHeadersFile ? { CHROMEX_CDP_HEADERS_FILE: config.cdpHeadersFile } : {}),
+    },
   });
   child.unref();
 

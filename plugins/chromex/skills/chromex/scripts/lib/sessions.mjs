@@ -26,7 +26,7 @@ export function loadSessions(config) {
 export function saveSessions(config, data) {
   const dir = dirname(config._sessionsPath);
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true, mode: 0o700 });
-  writeFileSync(config._sessionsPath, JSON.stringify(data, null, 2));
+  writeFileSync(config._sessionsPath, JSON.stringify(data, null, 2), { mode: 0o600 });
 }
 
 export function getSession(config, name) {

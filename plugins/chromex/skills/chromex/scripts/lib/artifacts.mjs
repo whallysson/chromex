@@ -21,7 +21,7 @@ export function resolveArtifactPath(filePath, category = 'artifacts', fileName =
 
 export function writeTextArtifact(filePath, text, category = 'artifacts', fileName = null) {
   const path = resolveArtifactPath(filePath, category, fileName);
-  writeFileSync(path, text);
+  writeFileSync(path, text, { mode: 0o600 });
   return { type: category, path };
 }
 

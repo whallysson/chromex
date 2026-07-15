@@ -2,13 +2,13 @@
 // No real browser -- tests pure logic and error handling
 
 import { describe, it, expect } from 'vitest';
-import { existsSync, mkdtempSync, readFileSync, rmSync, unlinkSync } from 'fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, unlinkSync, writeFileSync } from 'fs';
 import { homedir, tmpdir } from 'os';
 import { join, resolve } from 'path';
 import { parseKeyCombo, pressKeyStr } from '../plugins/chromex/skills/chromex/scripts/lib/commands/keyboard.mjs';
 import { SessionStats, statsStr } from '../plugins/chromex/skills/chromex/scripts/lib/commands/stats.mjs';
-import { netListStr, netDetailStr } from '../plugins/chromex/skills/chromex/scripts/lib/commands/network.mjs';
-import { consoleListStr, consoleDetailStr } from '../plugins/chromex/skills/chromex/scripts/lib/commands/console.mjs';
+import { netListStr, netDetailStr, netListResult, netDetailResult } from '../plugins/chromex/skills/chromex/scripts/lib/commands/network.mjs';
+import { consoleListStr, consoleDetailStr, consoleListResult, consoleDetailResult } from '../plugins/chromex/skills/chromex/scripts/lib/commands/console.mjs';
 import { appStr, cacheStr, clearSiteDataStr, idbStr, serviceWorkersStr, storageUsageStr } from '../plugins/chromex/skills/chromex/scripts/lib/commands/app.mjs';
 import { stateStr } from '../plugins/chromex/skills/chromex/scripts/lib/commands/state.mjs';
 import { shotStr } from '../plugins/chromex/skills/chromex/scripts/lib/commands/screenshot.mjs';
@@ -16,6 +16,7 @@ import { pdfStr } from '../plugins/chromex/skills/chromex/scripts/lib/commands/p
 import { harStr } from '../plugins/chromex/skills/chromex/scripts/lib/commands/har.mjs';
 import { traceStr } from '../plugins/chromex/skills/chromex/scripts/lib/commands/trace.mjs';
 import { heapStr } from '../plugins/chromex/skills/chromex/scripts/lib/commands/heap.mjs';
+import { HeapAnalysisStore } from '../plugins/chromex/skills/chromex/scripts/lib/heap-analysis.mjs';
 import { downloadStr } from '../plugins/chromex/skills/chromex/scripts/lib/commands/download.mjs';
 import { buildLocator } from '../plugins/chromex/skills/chromex/scripts/lib/commands/locator.mjs';
 import { interceptStr } from '../plugins/chromex/skills/chromex/scripts/lib/commands/intercept.mjs';
@@ -23,6 +24,15 @@ import { showStr } from '../plugins/chromex/skills/chromex/scripts/lib/commands/
 import { evidenceStr, recordEvidenceAction } from '../plugins/chromex/skills/chromex/scripts/lib/commands/evidence.mjs';
 import { sessionStatePath } from '../plugins/chromex/skills/chromex/scripts/lib/sessions.mjs';
 import { resolveChromexPath, workspaceArtifactRoot } from '../plugins/chromex/skills/chromex/scripts/lib/artifacts.mjs';
+import { formatIssues, issuesStr } from '../plugins/chromex/skills/chromex/scripts/lib/commands/issues.mjs';
+import { inspectStr } from '../plugins/chromex/skills/chromex/scripts/lib/commands/inspect.mjs';
+import { diagnoseStr } from '../plugins/chromex/skills/chromex/scripts/lib/commands/diagnose.mjs';
+import { screencastStr } from '../plugins/chromex/skills/chromex/scripts/lib/commands/screencast.mjs';
+import { extensionsStr } from '../plugins/chromex/skills/chromex/scripts/lib/commands/extensions.mjs';
+import { thirdPartyStr } from '../plugins/chromex/skills/chromex/scripts/lib/commands/third-party.mjs';
+import { createWebMcpState, webMcpStr } from '../plugins/chromex/skills/chromex/scripts/lib/commands/webmcp.mjs';
+import { evalStr } from '../plugins/chromex/skills/chromex/scripts/lib/commands/evaluate.mjs';
+import { launchBrowser } from '../plugins/chromex/skills/chromex/scripts/lib/launcher.mjs';
 
 // Mock CDP client that records sent commands
 function mockCdp() {
@@ -79,6 +89,34 @@ async function withArtifactRoot(prefix, callback) {
     else process.env.CHROMEX_ARTIFACT_ROOT = previousArtifactRoot;
     rmSync(dir, { recursive: true, force: true });
   }
+}
+
+function heapFixture(windowSize = 100) {
+  return {
+    snapshot: {
+      meta: {
+        node_fields: ['type', 'name', 'id', 'self_size', 'edge_count', 'trace_node_id', 'detachedness'],
+        node_types: [['hidden', 'array', 'string', 'object', 'code', 'closure', 'regexp', 'number', 'native', 'synthetic', 'concatenated string', 'sliced string', 'symbol', 'bigint', 'object shape'], 'string', 'number', 'number', 'number', 'number', 'number'],
+        edge_fields: ['type', 'name_or_index', 'to_node'],
+        edge_types: [['context', 'element', 'property', 'internal', 'hidden', 'shortcut', 'weak'], 'string_or_number', 'node'],
+      },
+      node_count: 4,
+      edge_count: 3,
+      trace_function_count: 0,
+    },
+    nodes: [
+      9, 1, 1, 0, 2, 0, 0,
+      3, 2, 3, windowSize, 1, 0, 0,
+      2, 6, 5, 20, 0, 0, 0,
+      2, 6, 7, 25, 0, 0, 0,
+    ],
+    edges: [
+      2, 3, 7,
+      2, 4, 21,
+      2, 5, 14,
+    ],
+    strings: ['', '(GC roots)', 'Window', 'window', 'duplicate', 'greeting', 'hello'],
+  };
 }
 
 describe('Chromex path resolution', () => {
@@ -143,8 +181,9 @@ describe('Default file artifacts', () => {
       await traceStr(cdp, 'sid1', 'start');
       const output = await traceStr(cdp, 'sid1', 'stop');
 
-      expect(output).toContain(join(dir, 'artifacts', 'traces'));
-      expect(output).not.toContain('/tmp/chromex-trace.json');
+      expect(output.text).toContain(join(dir, 'artifacts', 'traces'));
+      expect(output.text).not.toContain('/tmp/chromex-trace.json');
+      expect(output.artifacts[0].type).toBe('trace');
     });
   });
 
@@ -152,8 +191,9 @@ describe('Default file artifacts', () => {
     await withArtifactRoot('chromex-heap-', async (dir) => {
       const output = await heapStr(artifactCdp(), 'sid1', 'snapshot');
 
-      expect(output).toContain(join(dir, 'artifacts', 'heap'));
-      expect(output).not.toContain('/tmp/chromex-heap.heapsnapshot');
+      expect(output.text).toContain(join(dir, 'artifacts', 'heap'));
+      expect(output.text).not.toContain('/tmp/chromex-heap.heapsnapshot');
+      expect(output.artifacts[0].type).toBe('heap-snapshot');
     });
   });
 
@@ -165,6 +205,173 @@ describe('Default file artifacts', () => {
       expect(output).toContain(join(dir, 'artifacts', 'downloads'));
       expect(cdp.sent.at(-1).params.downloadPath).toBe(join(dir, 'artifacts', 'downloads'));
     });
+  });
+});
+
+describe('Heap snapshot analysis', () => {
+  it('summarizes classes and finds duplicate strings', async () => {
+    await withArtifactRoot('chromex-heap-analysis-', async (dir) => {
+      const path = join(dir, 'heap.heapsnapshot');
+      writeFileSync(path, JSON.stringify(heapFixture()), { mode: 0o600 });
+      const store = new HeapAnalysisStore();
+
+      const summary = store.execute('summary', { filePath: path });
+      const duplicates = store.execute('duplicate-strings', { filePath: path });
+
+      expect(summary.data.nodes).toBe(4);
+      expect(summary.data.classes.some(item => item.name === 'Window')).toBe(true);
+      expect(duplicates.data.duplicates[0]).toMatchObject({ value: 'hello', count: 2, selfSize: 45 });
+    });
+  });
+
+  it('finds retainers, paths, and dominators', async () => {
+    await withArtifactRoot('chromex-heap-links-', async (dir) => {
+      const path = join(dir, 'heap.heapsnapshot');
+      writeFileSync(path, JSON.stringify(heapFixture()), { mode: 0o600 });
+      const store = new HeapAnalysisStore();
+
+      const retainers = store.execute('retainers', { filePath: path, node: 2 });
+      const paths = store.execute('retaining-paths', { filePath: path, node: 2 });
+      const dominators = store.execute('dominators', { filePath: path });
+
+      expect(retainers.data.retainers[0]).toMatchObject({ fromNode: 1, name: 'greeting' });
+      expect(paths.data.paths[0].map(node => node.index)).toEqual([2, 1, 0]);
+      expect(dominators.data.dominators.some(node => node.index === 1 && node.retainedSize === 120)).toBe(true);
+    });
+  });
+
+  it('compares class and self-size changes between snapshots', async () => {
+    await withArtifactRoot('chromex-heap-compare-', async (dir) => {
+      const first = join(dir, 'first.heapsnapshot');
+      const second = join(dir, 'second.heapsnapshot');
+      writeFileSync(first, JSON.stringify(heapFixture(100)), { mode: 0o600 });
+      writeFileSync(second, JSON.stringify(heapFixture(180)), { mode: 0o600 });
+      const store = new HeapAnalysisStore();
+
+      const comparison = store.execute('compare', { filePath: first, otherFilePath: second });
+
+      expect(comparison.data.changes.find(item => item.name === 'Window').sizeDelta).toBe(80);
+    });
+  });
+});
+
+describe('Screencast capture', () => {
+  it('captures frames and writes manifest and replay artifacts', async () => {
+    await withArtifactRoot('chromex-screencast-', async () => {
+      const cdp = scriptedCdp();
+      const state = { active: null, last: null };
+      await screencastStr(cdp, 'sid1', state, 'start', '--format=png', '--max-frames=2');
+      cdp.emit('Page.screencastFrame', { sessionId: 7, data: Buffer.from('frame').toString('base64'), metadata: { timestamp: 1 } });
+
+      const output = await screencastStr(cdp, 'sid1', state, 'stop');
+      const manifest = JSON.parse(readFileSync(output.artifacts[0].path, 'utf8'));
+
+      expect(manifest.frameCount).toBe(1);
+      expect(existsSync(output.artifacts[1].path)).toBe(true);
+      expect(cdp.sent.map(item => item.method)).toContain('Page.screencastFrameAck');
+    });
+  });
+});
+
+describe('Chrome extension tooling', () => {
+  it('lists extensions and triggers their toolbar action', async () => {
+    const cdp = scriptedCdp({
+      'Extensions.getExtensions': { extensions: [{ id: 'abcdefghijkl', name: 'Inspector', version: '1.2.3', enabled: true }] },
+      'Target.getTargets': {
+        targetInfos: [
+          { targetId: 'target-1234', type: 'page', url: 'https://example.test', browserContextId: 'context-1' },
+          { targetId: 'tab-5678', type: 'tab', url: 'https://example.test', browserContextId: 'context-1' },
+        ],
+      },
+      'Extensions.triggerAction': {},
+    });
+
+    const list = await extensionsStr(cdp, 'target-1234', 'list');
+    const action = await extensionsStr(cdp, 'target-1234', 'action', 'abcdefghijkl');
+
+    expect(list.data.extensions[0].name).toBe('Inspector');
+    expect(action.data.pageTargetId).toBe('target-1234');
+    expect(action.data.targetId).toBe('tab-5678');
+    expect(cdp.sent.at(-1)).toMatchObject({ method: 'Extensions.triggerAction', params: { id: 'abcdefghijkl', targetId: 'tab-5678' } });
+  });
+
+  it('redacts storage secrets unless explicitly included', async () => {
+    const cdp = scriptedCdp({
+      'Target.getTargets': { targetInfos: [{ targetId: 'worker-1', type: 'service_worker', url: 'chrome-extension://abcdefghijkl/background.js' }] },
+      'Target.attachToTarget': { sessionId: 'extension-session' },
+      'Target.detachFromTarget': {},
+      'Extensions.getStorageItems': { data: { accessToken: 'secret-token', theme: 'dark' } },
+    });
+
+    const safe = await extensionsStr(cdp, 'target-1234', 'storage-get', 'abcdefghijkl', 'local');
+    const revealed = await extensionsStr(cdp, 'target-1234', 'storage-get', 'abcdefghijkl', 'local', '--include-sensitive');
+
+    expect(safe.data.values.accessToken).toBe('<redacted>');
+    expect(revealed.data.values.accessToken).toBe('secret-token');
+  });
+});
+
+describe('Third-party developer tools', () => {
+  const groups = [{
+    name: 'Application Tools',
+    description: 'Runtime state',
+    tools: [{
+      name: 'getState',
+      description: 'Gets application state',
+      inputSchema: { type: 'object', properties: { scope: { type: 'string' } }, required: ['scope'], additionalProperties: false },
+    }],
+  }];
+
+  it('discovers tools exposed by the page', async () => {
+    const cdp = scriptedCdp({ 'Runtime.evaluate': { result: { value: groups } } });
+
+    const output = await thirdPartyStr(cdp, 'sid1', 'list');
+
+    expect(output.data.groups[0].tools[0].name).toBe('getState');
+    expect(output.data.untrustedContent).toBe(true);
+  });
+
+  it('validates inputs and redacts untrusted tool output by default', async () => {
+    const cdp = scriptedCdp({
+      'Runtime.evaluate': params => params.expression.includes('describeCachedTools')
+        ? { result: { value: groups } }
+        : { result: { value: { accessToken: 'page-secret', status: 'ok' } } },
+    });
+
+    await expect(thirdPartyStr(cdp, 'sid1', 'execute', 'getState', '{}')).rejects.toThrow('scope is required');
+    const output = await thirdPartyStr(cdp, 'sid1', 'execute', 'getState', '{"scope":"all"}');
+
+    expect(output.data.output.accessToken).toBe('<redacted>');
+    expect(output.data.untrustedContent).toBe(true);
+  });
+});
+
+describe('WebMCP tooling', () => {
+  it('discovers and executes registered tools with untrusted output handling', async () => {
+    const tool = {
+      name: 'lookupOrder',
+      description: 'Looks up an order',
+      frameId: 'frame-main',
+      inputSchema: { type: 'object', properties: { id: { type: 'string' } }, required: ['id'] },
+    };
+    const cdp = scriptedCdp({
+      'WebMCP.enable': (_params, _sid, { emit }) => {
+        emit('WebMCP.toolsAdded', { tools: [tool] });
+        return {};
+      },
+      'WebMCP.invokeTool': (_params, _sid, { emit }) => {
+        emit('WebMCP.toolResponded', { invocationId: 'invoke-1', status: 'Completed', output: { token: 'web-secret', order: 42 } });
+        return { invocationId: 'invoke-1' };
+      },
+    });
+    const state = createWebMcpState(cdp, 'sid1');
+
+    const list = await webMcpStr(cdp, 'sid1', state, 'list');
+    const executed = await webMcpStr(cdp, 'sid1', state, 'execute', 'lookupOrder', '{"id":"42"}');
+
+    expect(list.data.tools[0].name).toBe('lookupOrder');
+    expect(executed.data.output.token).toBe('<redacted>');
+    expect(executed.data.untrustedContent).toBe(true);
   });
 });
 
@@ -184,6 +391,10 @@ function scriptedCdp(handlers = {}) {
     },
     async send(method, params, sid) {
       sent.push({ method, params, sid });
+      const handler = handlers[method];
+      if (typeof handler === 'function') return handler(params, sid, { emit, sent });
+      if (handler instanceof Error) throw handler;
+      if (handler !== undefined) return handler;
       if (method === 'Runtime.evaluate') {
         if (params.expression.includes('localStorage.length')) {
           return { result: { value: { localStorage: 18, sessionStorage: 2 } } };
@@ -199,13 +410,31 @@ function scriptedCdp(handlers = {}) {
           },
         };
       }
-      const handler = handlers[method];
-      if (typeof handler === 'function') return handler(params, sid, { emit, sent });
-      if (handler instanceof Error) throw handler;
-      return handler || {};
+      return {};
     },
   };
 }
+
+describe('JavaScript evaluation', () => {
+  it('returns the browser exception detail instead of the generic CDP label', async () => {
+    const cdp = scriptedCdp({
+      'Runtime.evaluate': {
+        exceptionDetails: {
+          text: 'Uncaught',
+          exception: { description: 'ReferenceError: missingValue is not defined' },
+        },
+      },
+    });
+
+    await expect(evalStr(cdp, 'sid1', 'missingValue')).rejects.toThrow('ReferenceError: missingValue is not defined');
+  });
+});
+
+describe('Browser launch contracts', () => {
+  it('rejects WebMCP in headless mode before launching a browser', async () => {
+    await expect(launchBrowser({ webMcp: true, headless: true })).rejects.toThrow('cannot run in headless mode');
+  });
+});
 
 function stateCdp() {
   const sent = [];
@@ -281,7 +510,7 @@ function evidenceCdp() {
           return {
             result: {
               value: JSON.stringify({
-                url: 'https://app.example.test/checkout',
+                url: 'https://app.example.test/checkout?token=evidence-secret',
                 title: 'Checkout',
                 viewport: { width: 1280, height: 720, devicePixelRatio: 2 },
               }),
@@ -305,6 +534,66 @@ function evidenceCdp() {
     },
   };
 }
+
+describe('DevTools diagnostics', () => {
+  it('collects and formats browser issues', async () => {
+    const cdp = scriptedCdp({
+      'Audits.enable': {},
+      'Audits.checkFormsIssues': { formIssues: [{ issueType: 'MissingIdForInput', violatingNodeId: 42 }] },
+    });
+    const state = { enabled: false, items: [{ code: 'CorsIssue', details: { corsIssueDetails: { requestId: 'req1' } } }] };
+
+    const listed = await issuesStr(cdp, 'sid1', state, 'list');
+    const forms = await issuesStr(cdp, 'sid1', state, 'check-forms');
+
+    expect(listed.text).toContain('CorsIssue');
+    expect(listed.data.total).toBe(1);
+    expect(forms.text).toContain('MissingIdForInput');
+    expect(cdp.sent.some(call => call.method === 'Audits.enable')).toBe(true);
+  });
+
+  it('formats an empty issue collection', () => {
+    expect(formatIssues([]).text).toContain('0 issues');
+  });
+
+  it('inspects computed styles, matched rules, listeners, and box model', async () => {
+    const cdp = scriptedCdp({
+      'DOM.getDocument': { root: { nodeId: 1 } },
+      'DOM.querySelector': { nodeId: 2 },
+      'CSS.getComputedStyleForNode': { computedStyle: [{ name: 'display', value: 'grid' }, { name: 'color', value: 'red' }] },
+      'CSS.getMatchedStylesForNode': { matchedCSSRules: [{ rule: { selectorList: { text: '.card' }, origin: 'regular', style: { cssProperties: [{ name: 'display', value: 'grid' }] } } }] },
+      'DOM.resolveNode': { object: { objectId: 'object-1' } },
+      'DOMDebugger.getEventListeners': { listeners: [{ type: 'click', useCapture: false, passive: true, once: false, scriptId: '7', lineNumber: 4, columnNumber: 1 }] },
+      'DOM.getBoxModel': { model: { width: 320, height: 180, content: [], padding: [], border: [], margin: [] } },
+    });
+
+    const result = await inspectStr(cdp, 'sid1', 'all', '.card', 'display');
+
+    expect(result.text).toContain('display: grid');
+    expect(result.text).toContain('click');
+    expect(result.text).toContain('320x180');
+    expect(result.data.computed).toHaveLength(1);
+  });
+
+  it('prioritizes browser, network, and console failures', async () => {
+    const cdp = scriptedCdp({
+      'Runtime.evaluate': { result: { value: { url: 'https://example.test/?token=secret', title: 'Example' } } },
+      'Performance.getMetrics': { metrics: [{ name: 'Nodes', value: 42 }] },
+    });
+    const context = {
+      issues: { items: [{ code: 'CorsIssue' }] },
+      consoleMessages: [{ id: 1, ts: 1, type: 'exception', args: ['boom'] }],
+      networkRequests: new Map([['req1', { url: 'https://example.test/api', method: 'GET', status: 500 }]]),
+    };
+
+    const result = await diagnoseStr(cdp, 'sid1', context, 10);
+
+    expect(result.text).toContain('Diagnosis: degraded');
+    expect(result.text).toContain('CorsIssue');
+    expect(result.text).toContain('500 GET');
+    expect(result.text).not.toContain('token=secret');
+  });
+});
 
 // ---- Application state commands ----
 
@@ -696,7 +985,7 @@ describe('Evidence pack command', () => {
 
     try {
       await evidenceStr(cdp, 'sid1', 'target1', state, 'start', 'checkout flow', { networkRequests, consoleMessages });
-      recordEvidenceAction(state, 'fill', ['@e1', 'secret@example.test'], true, 'filled');
+      recordEvidenceAction(state, 'fill', ['@e1', 'secret@example.test'], true, 'Authorization: Bearer evidence-secret');
       const output = await evidenceStr(cdp, 'sid1', 'target1', state, 'stop', 'after save', { networkRequests, consoleMessages });
       const evidence = JSON.parse(readFileSync(output.data.evidence, 'utf8'));
       const timeline = JSON.parse(readFileSync(join(output.data.root, 'timeline.json'), 'utf8'));
@@ -706,7 +995,9 @@ describe('Evidence pack command', () => {
       expect(existsSync(join(output.data.root, 'console.json'))).toBe(true);
       expect(existsSync(join(output.data.root, 'network.json'))).toBe(true);
       expect(evidence.marks).toHaveLength(2);
+      expect(evidence.marks[0].url).not.toContain('evidence-secret');
       expect(timeline.some(item => item.type === 'action' && item.args.includes('<redacted>'))).toBe(true);
+      expect(JSON.stringify(timeline)).not.toContain('evidence-secret');
       expect(readFileSync(output.data.replay, 'utf8')).toContain('Chromex Evidence');
       expect(output.artifacts.some(item => item.type === 'evidence-replay')).toBe(true);
     } finally {
@@ -937,13 +1228,13 @@ describe('SessionStats', () => {
     expect(entry.errors).toBe(1);
   });
 
-  it('maintains timeline with truncated args', () => {
+  it('maintains timeline with redacted args', () => {
     const stats = new SessionStats();
     stats.record('fill', ['#email', 'user@test.com', 'extra', 'more'], 1000, 1100, true, null);
 
     expect(stats.timeline).toHaveLength(1);
     expect(stats.timeline[0].cmd).toBe('fill');
-    expect(stats.timeline[0].args).toHaveLength(3); // truncated to 3
+    expect(stats.timeline[0].args).toEqual(['#email', '<redacted>']);
     expect(stats.timeline[0].duration).toBe(100);
     expect(stats.timeline[0].ok).toBe(true);
   });
@@ -954,6 +1245,14 @@ describe('SessionStats', () => {
     stats.record('eval', ['...'], 1000, 1100, false, longError);
 
     expect(stats.timeline[0].error.length).toBe(100);
+  });
+
+  it('redacts secrets from persisted error messages', () => {
+    const stats = new SessionStats();
+    stats.record('net', [], 1000, 1100, false, 'Authorization: Bearer stats-secret');
+
+    expect(stats.timeline[0].error).not.toContain('stats-secret');
+    expect(stats.timeline[0].error).toContain('<redacted>');
   });
 });
 
@@ -1084,6 +1383,21 @@ describe('netListStr', () => {
     // Truncation note tells agent there are more
     expect(output).toContain('showing last 50 of 60');
   });
+
+  it('filters requests and returns a cursor for older matches', () => {
+    const reqs = new Map();
+    reqs.set('req1', { url: 'https://example.com/api/old', method: 'GET', status: 422, type: 'XHR' });
+    reqs.set('req2', { url: 'https://example.com/image.png', method: 'GET', status: 200, type: 'Image' });
+    reqs.set('req3', { url: 'https://example.com/api/new', method: 'POST', status: 404, type: 'XHR' });
+
+    const first = netListResult(reqs, { status: '4xx', type: 'xhr', limit: 1 });
+    const second = netListResult(reqs, { status: '4xx', type: 'xhr', limit: 1, cursor: first.data.nextCursor });
+
+    expect(first.data.requests.map(request => request.id)).toEqual(['req3']);
+    expect(first.data.nextCursor).toBe('1');
+    expect(second.data.requests.map(request => request.id)).toEqual(['req1']);
+    expect(second.data.nextCursor).toBeNull();
+  });
 });
 
 // ---- netDetailStr ----
@@ -1115,7 +1429,8 @@ describe('netDetailStr', () => {
     expect(result).toContain('201 Created');
     expect(result).toContain('application/json');
     expect(result).toContain('Request Headers:');
-    expect(result).toContain('Authorization: Bearer xxx');
+    expect(result).toContain('Authorization: <redacted>');
+    expect(result).not.toContain('Bearer xxx');
     expect(result).toContain('Response Headers:');
     expect(result).toContain('X-Request-Id: abc123');
     expect(result).toContain('DNS: 5.0ms');
@@ -1123,6 +1438,39 @@ describe('netDetailStr', () => {
     expect(result).toContain('SSL: 10.0ms');
     expect(result).toContain('TTFB: 28.0ms');
     expect(result).toContain('Body: (unavailable)');
+  });
+
+  it('reveals sensitive request data only when explicitly requested', async () => {
+    const reqs = new Map([['req1.1', {
+      url: 'https://api.example.com/users?token=secret',
+      method: 'GET',
+      status: 200,
+      requestHeaders: { Authorization: 'Bearer xxx' },
+    }]]);
+    const cdp = mockCdp();
+
+    const result = await netDetailStr(cdp, 'sid1', 'req1.1', reqs, { includeSensitive: true });
+
+    expect(result).toContain('Authorization: Bearer xxx');
+    expect(result).toContain('token=secret');
+  });
+
+  it('redacts request and response bodies unless explicitly requested', async () => {
+    const reqs = new Map([['req1', {
+      url: 'https://api.example.com/login',
+      method: 'POST',
+      status: 200,
+      postData: '{"password":"hunter2"}',
+    }]]);
+    const cdp = { send: async () => ({ body: '{"accessToken":"response-secret"}', base64Encoded: false }) };
+
+    const safe = await netDetailResult(cdp, 'sid', 'req1', reqs);
+    const revealed = await netDetailResult(cdp, 'sid', 'req1', reqs, { includeSensitive: true });
+
+    expect(safe.text).not.toContain('hunter2');
+    expect(safe.text).not.toContain('response-secret');
+    expect(revealed.text).toContain('hunter2');
+    expect(revealed.text).toContain('response-secret');
   });
 
   it('resolves prefix match', async () => {
@@ -1152,6 +1500,19 @@ describe('netDetailStr', () => {
     const result = await netDetailStr(cdp, 'sid', 'req1.1', reqs);
 
     expect(result).toContain('{"users": []}');
+  });
+
+  it('expands response bodies only up to the requested bounded limit', async () => {
+    const reqs = new Map([['req1', { url: 'https://api.com/data', method: 'GET', status: 200 }]]);
+    const body = 'x'.repeat(5000);
+    const cdp = { send: async () => ({ body, base64Encoded: false }) };
+
+    const compact = await netDetailResult(cdp, 'sid', 'req1', reqs);
+    const expanded = await netDetailResult(cdp, 'sid', 'req1', reqs, { bodyLimit: 5000 });
+
+    expect(compact.data.request.responseBody).toHaveLength(2003);
+    expect(expanded.data.request.responseBody).toHaveLength(5000);
+    expect(expanded.data.bodyLimit).toBe(5000);
   });
 });
 
@@ -1221,6 +1582,21 @@ describe('consoleListStr', () => {
     const output = consoleListStr(msgs);
     expect(output.length).toBeLessThan(300);
   });
+
+  it('filters messages and pages through older matches', () => {
+    const msgs = [
+      { id: 0, ts: Date.now(), type: 'error', args: ['API old failure'] },
+      { id: 1, ts: Date.now(), type: 'log', args: ['API success'] },
+      { id: 2, ts: Date.now(), type: 'error', args: ['API new failure'] },
+    ];
+
+    const first = consoleListResult(msgs, { type: 'error', query: 'api', limit: 1 });
+    const second = consoleListResult(msgs, { type: 'error', query: 'api', limit: 1, cursor: first.data.nextCursor });
+
+    expect(first.data.messages.map(message => message.id)).toEqual([2]);
+    expect(first.data.nextCursor).toBe('1');
+    expect(second.data.messages.map(message => message.id)).toEqual([0]);
+  });
 });
 
 // ---- consoleDetailStr ----
@@ -1236,6 +1612,16 @@ describe('consoleDetailStr', () => {
 
     expect(output).toContain('ERROR #0');
     expect(output).toContain('ReferenceError: x is not defined');
+  });
+
+  it('redacts sensitive values unless explicitly requested', () => {
+    const msgs = [{ id: 0, ts: Date.now(), type: 'log', args: ['Authorization: Bearer console-secret'] }];
+
+    const safe = consoleDetailResult(msgs, '0');
+    const revealed = consoleDetailResult(msgs, '0', { includeSensitive: true });
+
+    expect(safe.text).not.toContain('console-secret');
+    expect(revealed.text).toContain('console-secret');
   });
 
   it('includes stack trace when available', () => {
