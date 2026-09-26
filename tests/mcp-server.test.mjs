@@ -3,7 +3,9 @@
 
 import { describe, it, expect } from 'vitest';
 import { spawn } from 'child_process';
-import { resolve } from 'path';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'fs';
+import { createServer } from 'net';
+import { join, resolve } from 'path';
 import { fileURLToPath } from 'url';
 import { getEncoding } from 'js-tiktoken';
 
@@ -59,6 +61,63 @@ function findById(responses, id) {
   return responses.find(r => r.id === id);
 }
 
+async function captureDaemonRequest(toolName, toolArguments) {
+  const directory = mkdtempSync('/tmp/chromex-mcp-dispatch-');
+  const homeDirectory = join(directory, 'home');
+  const runtimeDirectory = join(directory, 'runtime');
+  const configDirectory = join(homeDirectory, '.chromex');
+  const socketDirectory = join(runtimeDirectory, 'chromex');
+  const targetId = 'ABCDEF12';
+  const socketPath = join(socketDirectory, `${targetId}.sock`);
+  let capturedRequest;
+
+  mkdirSync(configDirectory, { recursive: true });
+  mkdirSync(socketDirectory, { recursive: true });
+  writeFileSync(join(configDirectory, 'config.json'), JSON.stringify({ socketAuth: false }), { mode: 0o600 });
+
+  const server = createServer((socket) => {
+    let buffer = '';
+    socket.on('data', (chunk) => {
+      buffer += chunk.toString();
+      const newlineIndex = buffer.indexOf('\n');
+      if (newlineIndex === -1) return;
+      capturedRequest = JSON.parse(buffer.slice(0, newlineIndex));
+      socket.end(`${JSON.stringify({ ok: true, result: 'captured' })}\n`);
+    });
+  });
+
+  await new Promise((resolveListen, rejectListen) => {
+    server.once('error', rejectListen);
+    server.listen(socketPath, () => {
+      server.off('error', rejectListen);
+      resolveListen();
+    });
+  });
+
+  try {
+    const responses = await mcpSession([
+      INIT,
+      INITIALIZED,
+      {
+        jsonrpc: '2.0',
+        id: 1,
+        method: 'tools/call',
+        params: { name: toolName, arguments: { target: targetId, ...toolArguments } },
+      },
+    ], 10000, {
+      env: { HOME: homeDirectory, XDG_RUNTIME_DIR: runtimeDirectory },
+    });
+    const response = findById(responses, 1);
+    if (!response || response.result?.isError) {
+      throw new Error(response?.result?.content?.[0]?.text || 'MCP request did not complete');
+    }
+    return capturedRequest;
+  } finally {
+    await new Promise(resolveClose => server.close(resolveClose));
+    rmSync(directory, { recursive: true, force: true });
+  }
+}
+
 // ---- Protocol tests ----
 
 describe('MCP Protocol', () => {
@@ -69,7 +128,7 @@ describe('MCP Protocol', () => {
     expect(r.result.protocolVersion).toBe('2025-03-26');
     expect(r.result.capabilities).toEqual({ tools: { listChanged: false } });
     expect(r.result.serverInfo.name).toBe('chromex');
-    expect(r.result.serverInfo.version).toBe('1.8.1');
+    expect(r.result.serverInfo.version).toBe('1.8.2');
   });
 
   it('negotiates unknown protocol versions to the latest supported version', async () => {
@@ -288,7 +347,7 @@ describe('Tool Definitions', () => {
     }
   });
 
-  it('marks Lighthouse audit as an open-world operation with side effects', async () => {
+  it('marks Lighthouse audit as an open-world operation with destructive side effects', async () => {
     const responses = await mcpSession([
       INIT,
       INITIALIZED,
@@ -298,7 +357,7 @@ describe('Tool Definitions', () => {
     const auditTool = tools.find(tool => tool.name === 'chromex_audit');
 
     expect(auditTool.annotations.readOnlyHint).toBe(false);
-    expect(auditTool.annotations.destructiveHint).toBe(false);
+    expect(auditTool.annotations.destructiveHint).toBe(true);
     expect(auditTool.annotations.openWorldHint).toBe(true);
   });
 
@@ -393,6 +452,21 @@ describe('Tool Execution (no browser)', () => {
     expect(r.result.structuredContent).toBeDefined();
     expect(r.result.structuredContent.artifacts.some(item => item.type === 'dashboard')).toBe(true);
     expect(r.result.structuredContent.artifacts.some(item => item.type === 'annotations')).toBe(true);
+  });
+
+  it.each([
+    ['no optional values', {}, ['', '', '']],
+    ['categories only', { categories: 'performance' }, ['performance', '', '']],
+    ['device only', { device: 'desktop' }, ['', 'desktop', '']],
+    ['report path only', { reportPath: 'reports/audit.html' }, ['', '', 'reports/audit.html']],
+    ['categories and device', { categories: 'performance', device: 'desktop' }, ['performance', 'desktop', '']],
+    ['categories and report path', { categories: 'performance', reportPath: 'reports/audit.html' }, ['performance', '', 'reports/audit.html']],
+    ['device and report path', { device: 'desktop', reportPath: 'reports/audit.html' }, ['', 'desktop', 'reports/audit.html']],
+    ['all optional values', { categories: 'performance', device: 'desktop', reportPath: 'reports/audit.html' }, ['performance', 'desktop', 'reports/audit.html']],
+  ])('preserves audit argument positions with %s', async (_label, toolArguments, expectedArguments) => {
+    const request = await captureDaemonRequest('chromex_audit', toolArguments);
+
+    expect(request).toMatchObject({ cmd: 'audit', args: expectedArguments });
   });
 });
 

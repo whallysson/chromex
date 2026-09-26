@@ -1,4 +1,3 @@
-// Lighthouse audit via subprocess (zero deps -- invokes npx lighthouse externally)
 // Chrome: connects to existing browser via --port (reuses session)
 // Other browsers (Brave, Edge, etc.): Lighthouse launches its own headless Chrome
 
@@ -8,6 +7,53 @@ import { resolveArtifactPath } from '../artifacts.mjs';
 import { evalStr } from './evaluate.mjs';
 
 const VALID_CATEGORIES = ['performance', 'accessibility', 'seo', 'best-practices'];
+const LIGHTHOUSE_PACKAGE = 'lighthouse';
+const LIGHTHOUSE_RESOLVER = `
+const { existsSync, realpathSync } = require('node:fs');
+const { delimiter, join } = require('node:path');
+const executablePath = (process.env.PATH || '')
+  .split(delimiter)
+  .map(directory => join(directory, 'lighthouse'))
+  .find(existsSync);
+if (!executablePath) throw new Error('Lighthouse executable not found');
+process.stdout.write(realpathSync(executablePath));
+`;
+let cachedLighthouseCliPath;
+
+function resolveLighthouseCliPath() {
+  if (cachedLighthouseCliPath && existsSync(cachedLighthouseCliPath)) {
+    return cachedLighthouseCliPath;
+  }
+
+  try {
+    const cliPath = execFileSync('npx', [
+      '--yes',
+      `--package=${LIGHTHOUSE_PACKAGE}`,
+      '--',
+      process.execPath,
+      '-e',
+      LIGHTHOUSE_RESOLVER,
+    ], {
+      encoding: 'utf8',
+      timeout: 120000,
+      stdio: ['pipe', 'pipe', 'pipe'],
+      shell: false,
+    }).trim();
+
+    if (!cliPath || !existsSync(cliPath)) {
+      throw new Error('Lighthouse executable not found after installation');
+    }
+
+    cachedLighthouseCliPath = cliPath;
+    return cachedLighthouseCliPath;
+  } catch (error) {
+    const stderr = error.stderr?.toString().trim() || '';
+    if (error.code === 'ENOENT') {
+      throw new Error('npx not found. Install Node.js with npm.');
+    }
+    throw new Error(`Lighthouse setup failed: ${stderr || error.message}`);
+  }
+}
 
 // Find any Chromium-based browser for CHROME_PATH env var
 function findChromiumPath() {
@@ -89,7 +135,8 @@ export async function auditStr(cdp, sid, categories, device, reportPath) {
     mode = 'standalone (headless Chrome)';
   }
 
-  const lighthouseArgs = ['--yes', 'lighthouse', url, ...args];
+  const lighthouseArgs = [url, ...args];
+  const lighthouseCliPath = resolveLighthouseCliPath();
 
   // Set CHROME_PATH for standalone mode (Lighthouse uses chrome-launcher which reads it)
   const env = { ...process.env };
@@ -100,7 +147,7 @@ export async function auditStr(cdp, sid, categories, device, reportPath) {
 
   let jsonOutput;
   try {
-    jsonOutput = execFileSync('npx', lighthouseArgs, {
+    jsonOutput = execFileSync(process.execPath, [lighthouseCliPath, ...lighthouseArgs], {
       encoding: 'utf8',
       timeout: 120000,
       stdio: ['pipe', 'pipe', 'pipe'],
@@ -110,9 +157,6 @@ export async function auditStr(cdp, sid, categories, device, reportPath) {
     });
   } catch (e) {
     const stderr = e.stderr?.toString().trim() || '';
-    if (e.code === 'ENOENT' || stderr.includes('not found') || stderr.includes('ENOENT')) {
-      throw new Error('lighthouse not found. Install: npm i -g lighthouse');
-    }
     if (stderr.includes('No Chrome installations found')) {
       throw new Error('Lighthouse needs Chrome installed to run in standalone mode. Install Google Chrome or run against a Chrome instance with debug port.');
     }

@@ -1,6 +1,6 @@
 {
   "name": "chromex-mcp",
-  "version": "1.8.1",
+  "version": "1.8.2",
   "description": "Agent-first Chrome DevTools toolkit with a token-efficient CLI, 85 typed MCP tools, modal-free pipe transport, diagnostics, memory analysis, extensions, and WebMCP.",
   "type": "module",
   "bin": {

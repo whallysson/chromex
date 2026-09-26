@@ -1,7 +1,7 @@
 ---
 name: chromex
 description: "Interact with local Chromium browser session via CDP. Use when asked to inspect, debug, test, scrape, fill forms, take screenshots, or interact with a page open in Chrome/Brave/Edge. Only on explicit user approval. Triggers for: 'inspect page', 'take screenshot', 'fill form', 'check browser', 'debug page', 'web vitals', 'browser automation'."
-version: 1.8.1
+version: 1.8.2
 ---
 
 # Chromex -- Chrome DevTools Protocol CLI

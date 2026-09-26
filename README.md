@@ -78,7 +78,7 @@ Chromex is a direct CDP layer for coding agents. It sits between raw Chrome DevT
 
 The core runtime uses only Node.js built-in modules. Chromex does not install heavy browser automation runtimes, Selenium, browser drivers, telemetry SDKs, update checkers, or bundled browsers.
 
-The only exception is the optional `audit` command: it runs Lighthouse as a subprocess with `npx --yes lighthouse` when you explicitly run an audit. All other CLI and MCP commands run through Chromex's own CDP client.
+The only exception is the optional `audit` command: it uses `npx` to resolve Lighthouse on demand, then runs the Lighthouse JavaScript CLI directly with Node when you explicitly run an audit. All other CLI and MCP commands run through Chromex's own CDP client.
 
 Development dependencies are used only for tests and token benchmarks.
 

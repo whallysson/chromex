@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { delimiter, join } from 'node:path';
 import { redactCommandArgs, redactHeaders, redactObject, redactUrl } from '../plugins/chromex/skills/chromex/scripts/lib/redaction.mjs';
@@ -19,24 +19,37 @@ function auditCdp(url, wsUrl) {
 async function captureAuditInvocation(url, reportPath, wsUrl) {
   const directory = mkdtempSync(join(tmpdir(), 'chromex-audit-security-'));
   const capturePath = join(directory, 'args.json');
+  const resolverCapturePath = join(directory, 'resolver-args.json');
   const markerPath = join(directory, 'injected');
   const executablePath = join(directory, 'npx');
   const curlPath = join(directory, 'curl');
+  const lighthouseDirectory = join(directory, 'node_modules', 'lighthouse', 'cli');
+  const lighthouseCliPath = join(lighthouseDirectory, 'index.js');
   const previousPath = process.env.PATH;
   const previousCapturePath = process.env.CHROMEX_AUDIT_CAPTURE;
+  const previousResolverCapturePath = process.env.CHROMEX_AUDIT_RESOLVER_CAPTURE;
+  const previousLighthouseCliPath = process.env.CHROMEX_AUDIT_LIGHTHOUSE_CLI;
   const previousMarkerPath = process.env.CHROMEX_AUDIT_MARKER;
   const previousArtifactRoot = process.env.CHROMEX_ARTIFACT_ROOT;
   const resolvedReportPath = reportPath ? join(directory, reportPath) : undefined;
 
+  mkdirSync(lighthouseDirectory, { recursive: true });
   writeFileSync(executablePath, `#!/usr/bin/env node
+const { writeFileSync } = require('node:fs');
+writeFileSync(process.env.CHROMEX_AUDIT_RESOLVER_CAPTURE, JSON.stringify(process.argv.slice(2)));
+process.stdout.write(process.env.CHROMEX_AUDIT_LIGHTHOUSE_CLI);
+`, { mode: 0o700 });
+  writeFileSync(lighthouseCliPath, `
 const { writeFileSync } = require('node:fs');
 writeFileSync(process.env.CHROMEX_AUDIT_CAPTURE, JSON.stringify(process.argv.slice(2)));
 process.stdout.write(JSON.stringify({ categories: { performance: { title: 'Performance', score: 1 } }, audits: {} }));
-`, { mode: 0o700 });
+`);
   writeFileSync(curlPath, '#!/usr/bin/env node\nprocess.stdout.write(\'{}\');\n', { mode: 0o700 });
 
   process.env.PATH = `${directory}${delimiter}${previousPath || ''}`;
   process.env.CHROMEX_AUDIT_CAPTURE = capturePath;
+  process.env.CHROMEX_AUDIT_RESOLVER_CAPTURE = resolverCapturePath;
+  process.env.CHROMEX_AUDIT_LIGHTHOUSE_CLI = lighthouseCliPath;
   process.env.CHROMEX_AUDIT_MARKER = markerPath;
   process.env.CHROMEX_ARTIFACT_ROOT = join(directory, 'artifacts');
 
@@ -44,6 +57,7 @@ process.stdout.write(JSON.stringify({ categories: { performance: { title: 'Perfo
     const output = await auditStr(auditCdp(url, wsUrl), 'session', 'performance', 'desktop', resolvedReportPath);
     return {
       args: JSON.parse(readFileSync(capturePath, 'utf8')),
+      resolverArgs: JSON.parse(readFileSync(resolverCapturePath, 'utf8')),
       markerCreated: existsSync(markerPath),
       output,
       reportPath: resolvedReportPath,
@@ -53,6 +67,10 @@ process.stdout.write(JSON.stringify({ categories: { performance: { title: 'Perfo
     else process.env.PATH = previousPath;
     if (previousCapturePath === undefined) delete process.env.CHROMEX_AUDIT_CAPTURE;
     else process.env.CHROMEX_AUDIT_CAPTURE = previousCapturePath;
+    if (previousResolverCapturePath === undefined) delete process.env.CHROMEX_AUDIT_RESOLVER_CAPTURE;
+    else process.env.CHROMEX_AUDIT_RESOLVER_CAPTURE = previousResolverCapturePath;
+    if (previousLighthouseCliPath === undefined) delete process.env.CHROMEX_AUDIT_LIGHTHOUSE_CLI;
+    else process.env.CHROMEX_AUDIT_LIGHTHOUSE_CLI = previousLighthouseCliPath;
     if (previousMarkerPath === undefined) delete process.env.CHROMEX_AUDIT_MARKER;
     else process.env.CHROMEX_AUDIT_MARKER = previousMarkerPath;
     if (previousArtifactRoot === undefined) delete process.env.CHROMEX_ARTIFACT_ROOT;
@@ -112,6 +130,7 @@ describe('Lighthouse audit process boundary', () => {
 
     expect(result.markerCreated).toBe(false);
     expect(result.args).toContain(url);
+    expect(result.resolverArgs).not.toContain(url);
   });
 
   it('passes report paths without shell interpretation', async () => {
@@ -120,6 +139,7 @@ describe('Lighthouse audit process boundary', () => {
 
     expect(result.markerCreated).toBe(false);
     expect(result.args).toContain(`--output-path=${result.reportPath}`);
+    expect(result.resolverArgs).not.toContain(result.reportPath);
   });
 
   it('preserves ordinary Lighthouse arguments and output', async () => {
@@ -128,8 +148,6 @@ describe('Lighthouse audit process boundary', () => {
     const result = await captureAuditInvocation(url, reportPath);
 
     expect(result.args).toEqual([
-      '--yes',
-      'lighthouse',
       url,
       '--output=json',
       '--only-categories=performance',
@@ -140,6 +158,14 @@ describe('Lighthouse audit process boundary', () => {
       '--output=json',
       '--chrome-flags=--headless=new',
     ]);
+    expect(result.resolverArgs.slice(0, 5)).toEqual([
+      '--yes',
+      '--package=lighthouse',
+      '--',
+      process.execPath,
+      '-e',
+    ]);
+    expect(result.resolverArgs).toHaveLength(6);
     expect(result.output).toContain('Lighthouse Audit: Performance: 100');
   });
 

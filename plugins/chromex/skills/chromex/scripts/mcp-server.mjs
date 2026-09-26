@@ -801,7 +801,7 @@ const TOOLS = [
       categories: { type: 'string', description: 'Comma-separated: performance,accessibility,seo,best-practices (default: all)' },
       device: { type: 'string', enum: ['mobile', 'desktop'], description: 'Device preset (default: mobile)' },
       reportPath: { type: 'string', description: 'Path to save full HTML report' },
-    }, ['target'], RW),
+    }, ['target'], DESTRUCTIVE),
 
   tool('chromex_stats',
     'Session analytics: command counts, average timing, error rates, action timeline. All data is local, never sent externally.',
@@ -1053,7 +1053,7 @@ function toolToCmd(name, p) {
       return { cmd: 'webmcp', args: a };
     }
     case 'chromex_webauthn':   return { cmd: 'webauthn', args: [p.action] };
-    case 'chromex_audit':      return { cmd: 'audit', args: [p.categories || '', p.device || '', p.reportPath || ''].filter(Boolean) };
+    case 'chromex_audit':      return { cmd: 'audit', args: [p.categories ?? '', p.device ?? '', p.reportPath ?? ''] };
     case 'chromex_stats': {
       const a = [];
       if (p.full) a.push('--full');
