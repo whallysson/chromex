@@ -69,7 +69,7 @@ describe('MCP Protocol', () => {
     expect(r.result.protocolVersion).toBe('2025-03-26');
     expect(r.result.capabilities).toEqual({ tools: { listChanged: false } });
     expect(r.result.serverInfo.name).toBe('chromex');
-    expect(r.result.serverInfo.version).toBe('1.8.0');
+    expect(r.result.serverInfo.version).toBe('1.8.1');
   });
 
   it('negotiates unknown protocol versions to the latest supported version', async () => {
@@ -286,6 +286,20 @@ describe('Tool Definitions', () => {
       expect(t, `${name} should exist`).toBeDefined();
       expect(t.annotations.readOnlyHint, `${name} should be readOnly`).toBe(true);
     }
+  });
+
+  it('marks Lighthouse audit as an open-world operation with side effects', async () => {
+    const responses = await mcpSession([
+      INIT,
+      INITIALIZED,
+      { jsonrpc: '2.0', id: 1, method: 'tools/list' },
+    ]);
+    tools = findById(responses, 1).result.tools;
+    const auditTool = tools.find(tool => tool.name === 'chromex_audit');
+
+    expect(auditTool.annotations.readOnlyHint).toBe(false);
+    expect(auditTool.annotations.destructiveHint).toBe(false);
+    expect(auditTool.annotations.openWorldHint).toBe(true);
   });
 
   it('destructive tools have destructiveHint: true', async () => {

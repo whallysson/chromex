@@ -2,6 +2,12 @@
 
 Chromex is designed for AI agents interacting with real browsers. Security is a first-class concern.
 
+## Reporting Vulnerabilities
+
+Report suspected vulnerabilities privately to `whallysson.dev@gmail.com`. Do not open a public issue for an undisclosed vulnerability.
+
+Include the affected versions and platforms, reproducible steps or a proof of concept, the expected impact, and any suggested remediation. Keep the report and technical details private until a fixed release is available or a disclosure date is agreed.
+
 ## Config File
 
 All security settings live in `~/.chromex/config.json` (auto-created on first run).

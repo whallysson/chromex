@@ -10,7 +10,7 @@
     {
       "name": "chromex",
       "description": "Chrome, Brave, Edge, Chromium, and Vivaldi automation through CDP with full CLI/MCP capability parity, diagnostics, memory analysis, extensions, and WebMCP.",
-      "version": "1.8.0",
+      "version": "1.8.1",
       "author": {
         "name": "Whallysson Avelino",
         "email": "whallysson.dev@gmail.com"

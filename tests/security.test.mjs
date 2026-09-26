@@ -1,6 +1,65 @@
 import { describe, expect, it } from 'vitest';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { delimiter, join } from 'node:path';
 import { redactCommandArgs, redactHeaders, redactObject, redactUrl } from '../plugins/chromex/skills/chromex/scripts/lib/redaction.mjs';
 import { redactPages } from '../plugins/chromex/skills/chromex/scripts/lib/browser.mjs';
+import { auditStr } from '../plugins/chromex/skills/chromex/scripts/lib/commands/audit.mjs';
+
+function auditCdp(url, wsUrl) {
+  return {
+    wsUrl,
+    send(method) {
+      if (method === 'Runtime.evaluate') return Promise.resolve({ result: { value: url } });
+      return Promise.resolve({});
+    },
+  };
+}
+
+async function captureAuditInvocation(url, reportPath, wsUrl) {
+  const directory = mkdtempSync(join(tmpdir(), 'chromex-audit-security-'));
+  const capturePath = join(directory, 'args.json');
+  const markerPath = join(directory, 'injected');
+  const executablePath = join(directory, 'npx');
+  const curlPath = join(directory, 'curl');
+  const previousPath = process.env.PATH;
+  const previousCapturePath = process.env.CHROMEX_AUDIT_CAPTURE;
+  const previousMarkerPath = process.env.CHROMEX_AUDIT_MARKER;
+  const previousArtifactRoot = process.env.CHROMEX_ARTIFACT_ROOT;
+  const resolvedReportPath = reportPath ? join(directory, reportPath) : undefined;
+
+  writeFileSync(executablePath, `#!/usr/bin/env node
+const { writeFileSync } = require('node:fs');
+writeFileSync(process.env.CHROMEX_AUDIT_CAPTURE, JSON.stringify(process.argv.slice(2)));
+process.stdout.write(JSON.stringify({ categories: { performance: { title: 'Performance', score: 1 } }, audits: {} }));
+`, { mode: 0o700 });
+  writeFileSync(curlPath, '#!/usr/bin/env node\nprocess.stdout.write(\'{}\');\n', { mode: 0o700 });
+
+  process.env.PATH = `${directory}${delimiter}${previousPath || ''}`;
+  process.env.CHROMEX_AUDIT_CAPTURE = capturePath;
+  process.env.CHROMEX_AUDIT_MARKER = markerPath;
+  process.env.CHROMEX_ARTIFACT_ROOT = join(directory, 'artifacts');
+
+  try {
+    const output = await auditStr(auditCdp(url, wsUrl), 'session', 'performance', 'desktop', resolvedReportPath);
+    return {
+      args: JSON.parse(readFileSync(capturePath, 'utf8')),
+      markerCreated: existsSync(markerPath),
+      output,
+      reportPath: resolvedReportPath,
+    };
+  } finally {
+    if (previousPath === undefined) delete process.env.PATH;
+    else process.env.PATH = previousPath;
+    if (previousCapturePath === undefined) delete process.env.CHROMEX_AUDIT_CAPTURE;
+    else process.env.CHROMEX_AUDIT_CAPTURE = previousCapturePath;
+    if (previousMarkerPath === undefined) delete process.env.CHROMEX_AUDIT_MARKER;
+    else process.env.CHROMEX_AUDIT_MARKER = previousMarkerPath;
+    if (previousArtifactRoot === undefined) delete process.env.CHROMEX_ARTIFACT_ROOT;
+    else process.env.CHROMEX_ARTIFACT_ROOT = previousArtifactRoot;
+    rmSync(directory, { recursive: true, force: true });
+  }
+}
 
 describe('sensitive data redaction', () => {
   it('redacts values from form and input commands', () => {
@@ -43,5 +102,56 @@ describe('sensitive data redaction', () => {
     expect(redactPages(pages)[0].title).not.toContain('title-secret');
     expect(redactPages(pages, { includeSensitive: true })[0].url).toContain('page-secret');
     expect(redactPages(pages, { includeSensitive: true })[0].title).toContain('title-secret');
+  });
+});
+
+describe('Lighthouse audit process boundary', () => {
+  it('passes page URLs without shell interpretation', async () => {
+    const url = 'https://example.test/#$(touch$IFS$CHROMEX_AUDIT_MARKER)';
+    const result = await captureAuditInvocation(url);
+
+    expect(result.markerCreated).toBe(false);
+    expect(result.args).toContain(url);
+  });
+
+  it('passes report paths without shell interpretation', async () => {
+    const reportPath = 'audit.html; touch$IFS$CHROMEX_AUDIT_MARKER #';
+    const result = await captureAuditInvocation('https://example.test/', reportPath);
+
+    expect(result.markerCreated).toBe(false);
+    expect(result.args).toContain(`--output-path=${result.reportPath}`);
+  });
+
+  it('preserves ordinary Lighthouse arguments and output', async () => {
+    const url = 'https://example.test/dashboard?view=weekly';
+    const reportPath = 'reports/audit result.html';
+    const result = await captureAuditInvocation(url, reportPath);
+
+    expect(result.args).toEqual([
+      '--yes',
+      'lighthouse',
+      url,
+      '--output=json',
+      '--only-categories=performance',
+      '--quiet',
+      '--preset=desktop',
+      `--output-path=${result.reportPath}`,
+      '--output=html',
+      '--output=json',
+      '--chrome-flags=--headless=new',
+    ]);
+    expect(result.output).toContain('Lighthouse Audit: Performance: 100');
+  });
+
+  it('preserves audits connected to an existing Chrome debug port', async () => {
+    const result = await captureAuditInvocation(
+      'https://example.test/',
+      undefined,
+      'ws://127.0.0.1:9222/devtools/browser/session',
+    );
+
+    expect(result.args).toContain('--port=9222');
+    expect(result.args).not.toContain('--chrome-flags=--headless=new');
+    expect(result.output).toContain('Mode: connected (existing browser)');
   });
 });

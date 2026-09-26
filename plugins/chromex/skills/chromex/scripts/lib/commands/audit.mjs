@@ -2,7 +2,7 @@
 // Chrome: connects to existing browser via --port (reuses session)
 // Other browsers (Brave, Edge, etc.): Lighthouse launches its own headless Chrome
 
-import { execSync } from 'child_process';
+import { execFileSync } from 'child_process';
 import { existsSync } from 'fs';
 import { resolveArtifactPath } from '../artifacts.mjs';
 import { evalStr } from './evaluate.mjs';
@@ -30,8 +30,9 @@ function findChromiumPath() {
 // Check if Chrome's HTTP debug endpoint is available (Brave/Edge don't expose it)
 function isHttpDebugAvailable(port) {
   try {
-    const result = execSync(`curl -sf http://127.0.0.1:${port}/json/version`, {
+    const result = execFileSync('curl', ['-sf', `http://127.0.0.1:${port}/json/version`], {
       encoding: 'utf8', timeout: 3000, stdio: ['pipe', 'pipe', 'pipe'],
+      shell: false,
     });
     return result.length > 0;
   } catch {
@@ -88,7 +89,7 @@ export async function auditStr(cdp, sid, categories, device, reportPath) {
     mode = 'standalone (headless Chrome)';
   }
 
-  const cmd = `npx --yes lighthouse ${JSON.stringify(url)} ${args.join(' ')}`;
+  const lighthouseArgs = ['--yes', 'lighthouse', url, ...args];
 
   // Set CHROME_PATH for standalone mode (Lighthouse uses chrome-launcher which reads it)
   const env = { ...process.env };
@@ -99,16 +100,17 @@ export async function auditStr(cdp, sid, categories, device, reportPath) {
 
   let jsonOutput;
   try {
-    jsonOutput = execSync(cmd, {
+    jsonOutput = execFileSync('npx', lighthouseArgs, {
       encoding: 'utf8',
       timeout: 120000,
       stdio: ['pipe', 'pipe', 'pipe'],
       maxBuffer: 50 * 1024 * 1024,
       env,
+      shell: false,
     });
   } catch (e) {
     const stderr = e.stderr?.toString().trim() || '';
-    if (stderr.includes('not found') || stderr.includes('ENOENT')) {
+    if (e.code === 'ENOENT' || stderr.includes('not found') || stderr.includes('ENOENT')) {
       throw new Error('lighthouse not found. Install: npm i -g lighthouse');
     }
     if (stderr.includes('No Chrome installations found')) {

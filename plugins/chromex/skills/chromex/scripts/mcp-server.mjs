@@ -801,7 +801,7 @@ const TOOLS = [
       categories: { type: 'string', description: 'Comma-separated: performance,accessibility,seo,best-practices (default: all)' },
       device: { type: 'string', enum: ['mobile', 'desktop'], description: 'Device preset (default: mobile)' },
       reportPath: { type: 'string', description: 'Path to save full HTML report' },
-    }, ['target'], RO),
+    }, ['target'], RW),
 
   tool('chromex_stats',
     'Session analytics: command counts, average timing, error rates, action timeline. All data is local, never sent externally.',
