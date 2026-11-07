@@ -586,7 +586,7 @@ chromex delete-data auth
 `CHROMEX_SESSION=auth` can replace `-s auth` for shell scripts.
 `chromex show` opens the generated dashboard in the default browser during normal CLI usage; set `CHROMEX_NO_OPEN=1` or use `--json`/`--raw` to only write the artifact.
 
-Named sessions keep a private storage-state file under `~/.chromex/session-data/<name>/storage-state.json`. Chromex restores it when the named session is reopened and refreshes it after state-changing session commands.
+Named sessions keep a private storage-state file under `~/.chromex/session-data/<name>/storage-state.json`. Chromex restores it when the named session gets a new tab, through `-s <name> open <url>` or a `-s <name> launch` that starts a fresh browser, and then loads the requested URL again, so a page that redirected to a sign-in form before the cookies arrived opens as asked. A reused browser keeps its live cookies. Chromex refreshes the file after state-changing session commands.
 
 Each named session remembers the browser it lives in. While that browser answers, `-s <name>` commands go to it even after another browser is launched, and a session tab missing from the shared page list is looked up in the session's own browser. An explicit `--cdp-url` or `CHROMEX_CDP_URL` still wins.
 

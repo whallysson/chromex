@@ -389,7 +389,7 @@ async function main() {
         const pages = await getPages(cdp);
         writePagesCache(config._pagesCachePath, pages);
         result = `Session "${sessionName}" opened (targetId: ${targetId.slice(0, 8)}). URL: ${args[0]}`;
-        if (await restoreSessionState(targetId, statePath).catch(() => false)) {
+        if (await restoreSessionState(targetId, statePath, args[0]).catch(() => false)) {
           result += `\nSession state restored from ${statePath}`;
         }
       } else {
@@ -666,20 +666,31 @@ async function pagesWithTarget(prefix) {
   return pages;
 }
 
+/**
+ * A freshly launched browser has lost the session cookies of the previous one, so the saved session
+ * state is restored before any command persists the empty state over it. A reused browser keeps its own.
+ * The tab daemon is pinned to this browser first: the default endpoint resolution skips a session
+ * browser while another browser answers.
+ */
 async function claimLaunchedBrowser(name, launched, url) {
   const cdp = new CDP(config.commandTimeout);
   await cdp.connect(launched.endpoint);
   const pages = await getPages(cdp).finally(() => cdp.close());
   const page = pages.find(item => url && (item.url === url || item.url === `${url}/`)) || pages.at(-1) || null;
+  const statePath = getSession(config, name)?.statePath || sessionStatePath(name);
   setSession(config, name, {
     endpoint: launched.endpoint,
     targetId: page?.targetId ?? null,
     browserContextId: null,
     url: page?.url || url || 'about:blank',
+    statePath,
   });
-  return page
-    ? `Session "${name}" uses this browser (targetId: ${page.targetId.slice(0, 8)}).`
-    : `Session "${name}" uses this browser. Run "chromex -s ${name} open <url>" to give it a tab.`;
+  if (!page) return `Session "${name}" uses this browser. Run "chromex -s ${name} open <url>" to give it a tab.`;
+  const claimed = `Session "${name}" uses this browser (targetId: ${page.targetId.slice(0, 8)}).`;
+  if (launched.reused) return claimed;
+  config.cdpUrl = launched.endpoint;
+  const restored = await restoreSessionState(page.targetId, statePath, url).catch(() => false);
+  return restored ? `${claimed}\nSession state restored from ${statePath}` : claimed;
 }
 
 async function getLivePages() {
@@ -746,13 +757,17 @@ function clearSessionRecords(records) {
   }
 }
 
-async function restoreSessionState(targetId, statePath) {
+/**
+ * Loads the saved state into the tab, then opens the requested URL again: the first load ran without the
+ * cookies and may have been redirected, to a sign-in page for example, so a reload would keep that page.
+ */
+async function restoreSessionState(targetId, statePath, url = null) {
   if (!statePath || !existsSync(statePath)) return false;
   const conn = await getOrStartTabDaemon(targetId, config);
   const response = await sendCommand(conn, { cmd: 'state', args: ['load', statePath], internal: true });
   if (!response.ok) return false;
   const reloadConn = await getOrStartTabDaemon(targetId, config);
-  await sendCommand(reloadConn, { cmd: 'nav', args: ['reload', '--no-snap', '--no-hints'], internal: true }).catch(() => {});
+  await sendCommand(reloadConn, { cmd: 'nav', args: [url || 'reload', '--no-snap', '--no-hints'], internal: true }).catch(() => {});
   return true;
 }
 
