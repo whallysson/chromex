@@ -1187,7 +1187,7 @@ describe('Evidence pack command', () => {
       networkRequests.set('during', { url: 'https://app.example.test/during', method: 'POST', wallTime: during / 1000 });
       consoleMessages.push({ id: 1, ts: during, type: 'log', args: ['checkout step'] });
       dialogs.push(dialog(2, 'later', new Date(during).toISOString(), null, 'open'));
-      const output = await evidenceStr(cdp, 'sid1', 'target1', state, 'stop', 'fim', context);
+      const output = await evidenceStr(cdp, 'sid1', 'target1', state, 'stop', 'done', context);
       const read = name => JSON.parse(readFileSync(join(output.data.root, name), 'utf8'));
 
       expect(read('console.json').map(message => message.args[0])).toEqual(['checkout step']);
@@ -1204,7 +1204,7 @@ describe('Evidence pack command', () => {
       const context = { networkRequests: new Map(), consoleMessages: [], dialogs: [], dir: packDir };
 
       const started = await evidenceStr(cdp, 'sid1', 'target1', state, 'start', 'checkout', context);
-      await evidenceStr(cdp, 'sid1', 'target1', state, 'stop', 'fim', context);
+      await evidenceStr(cdp, 'sid1', 'target1', state, 'stop', 'done', context);
 
       expect(started.data.root).toBe(packDir);
       expect(existsSync(join(packDir, 'evidence.json'))).toBe(true);
