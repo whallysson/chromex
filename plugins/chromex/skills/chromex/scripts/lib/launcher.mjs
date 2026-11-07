@@ -1,5 +1,5 @@
 // Browser launcher -- opens Chrome/Brave/Edge with remote debugging enabled
-import { chmodSync, existsSync, mkdirSync, readFileSync } from 'fs';
+import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'fs';
 import { spawn } from 'child_process';
 import { resolve } from 'path';
 import { homedir } from 'os';
@@ -7,7 +7,7 @@ import { createHash } from 'crypto';
 import net from 'net';
 import { fileURLToPath } from 'url';
 import { sleep } from './utils.mjs';
-import { getWsUrlFromPortFile, isEndpointAlive } from './browser.mjs';
+import { getWsUrlFromPortFile, isEndpointAlive, SESSION_BROWSER_MARKER } from './browser.mjs';
 import { CDP } from './client.mjs';
 
 const BROWSER_PATHS = {
@@ -128,17 +128,58 @@ export async function launchBrowser(options = {}) {
     const endpoint = await liveEndpointFromPortFile(portFile);
     if (endpoint) {
       const reused = endpoint === runningEndpoint;
+      if (reused && options.url) await ensurePage(endpoint, options.url).catch(() => {});
       const lines = [reused ? `Browser already running for profile ${options.profile || 'default'}` : `Browser launched (PID: ${child.pid})`];
       if (explicitBrowserPath) lines.push(`Browser path: ${browserPath}`);
       if (options.incognito) lines.push('Mode: incognito');
       lines.push(`Profile: ${options.profile || 'default'} (isolated)`);
       lines.push(`Remote debugging active`);
-      return { text: lines.join('\n'), endpoint, reused };
+      return { text: lines.join('\n'), endpoint, reused, sessionBrowser: markSessionBrowser(userDataDir, endpoint, reused, options.session) };
     }
     await sleep(500);
   }
 
-  return { text: `Browser launched (PID: ${child.pid}) but DevToolsActivePort not found yet. Wait a moment and try "chromex list".`, endpoint: null, reused: false };
+  return { text: `Browser launched (PID: ${child.pid}) but DevToolsActivePort not found yet. Wait a moment and try "chromex list".`, endpoint: null, reused: false, sessionBrowser: false };
+}
+
+/**
+ * Keeps the profile mark that tells endpoint discovery a browser belongs to a named session.
+ * A fresh browser is marked only when launched for a session; a reused browser keeps the mark it had.
+ */
+function markSessionBrowser(userDataDir, endpoint, reused, session) {
+  const markerPath = resolve(userDataDir, SESSION_BROWSER_MARKER);
+  if (reused) {
+    try {
+      return JSON.parse(readFileSync(markerPath, 'utf8')).endpoint === endpoint;
+    } catch {
+      return false;
+    }
+  }
+  if (!session) {
+    rmSync(markerPath, { force: true });
+    return false;
+  }
+  writeFileSync(markerPath, JSON.stringify({ session, endpoint }), { mode: 0o600 });
+  return true;
+}
+
+/**
+ * Opens the URL in a reused browser unless a tab already shows it: Chrome hands a URL to the
+ * running instance of a visible profile, but a running headless instance ignores it.
+ */
+async function ensurePage(endpoint, url) {
+  const cdp = new CDP();
+  await cdp.connect(endpoint);
+  try {
+    for (let attempt = 0; attempt < 4; attempt++) {
+      const { targetInfos } = await cdp.send('Target.getTargets');
+      if (targetInfos.some(target => target.type === 'page' && (target.url === url || target.url === `${url}/`))) return;
+      await sleep(250);
+    }
+    await cdp.send('Target.createTarget', { url });
+  } finally {
+    cdp.close();
+  }
 }
 
 async function liveEndpointFromPortFile(portFile) {
@@ -165,7 +206,7 @@ async function launchPipeBrowser(browserPath, flags, userDataDir, options, expli
       throw new Error(`Browser pipe for profile ${options.profile || 'pipe'} is already active without WebMCP. Use another profile or stop that browser before relaunching with --webmcp.`);
     }
     if (options.url) await openPipePage(marker.socketPath, options.url);
-    return pipeLaunchResult(marker, options, explicitBrowserPath, browserPath, true);
+    return pipeLaunchResult(marker, options, explicitBrowserPath, browserPath, true, userDataDir);
   }
   const brokerPath = fileURLToPath(new URL('./browser-pipe-broker.mjs', import.meta.url));
   const broker = spawn(process.execPath, [brokerPath], {
@@ -185,14 +226,14 @@ async function launchPipeBrowser(browserPath, flags, userDataDir, options, expli
     if (brokerFailure) throw brokerFailure;
     if (await activePipeMarker(markerPath)) {
       const marker = JSON.parse(readFileSync(markerPath, 'utf8'));
-      return pipeLaunchResult(marker, options, explicitBrowserPath, browserPath, false);
+      return pipeLaunchResult(marker, options, explicitBrowserPath, browserPath, false, userDataDir);
     }
     await sleep(250);
   }
   throw new Error('Browser pipe failed to start within 15 seconds.');
 }
 
-function pipeLaunchResult(marker, options, explicitBrowserPath, browserPath, reused) {
+function pipeLaunchResult(marker, options, explicitBrowserPath, browserPath, reused, userDataDir) {
   const lines = [reused ? `Browser pipe already active (PID: ${marker.browserPid})` : `Browser launched through pipe (PID: ${marker.browserPid})`];
   if (explicitBrowserPath) lines.push(`Browser path: ${browserPath}`);
   if (options.incognito) lines.push('Mode: incognito');
@@ -200,7 +241,8 @@ function pipeLaunchResult(marker, options, explicitBrowserPath, browserPath, reu
   lines.push('Transport: remote debugging pipe');
   if (marker.extensionTools) lines.push('Extension tools: enabled');
   if (marker.webMcp) lines.push('WebMCP: enabled');
-  return { text: lines.join('\n'), endpoint: `unix://${marker.socketPath}`, reused };
+  const endpoint = `unix://${marker.socketPath}`;
+  return { text: lines.join('\n'), endpoint, reused, sessionBrowser: markSessionBrowser(userDataDir, endpoint, reused, options.session) };
 }
 
 async function activePipeMarker(markerPath) {

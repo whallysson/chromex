@@ -2,7 +2,7 @@
 // No real browser -- tests pure logic and error handling
 
 import { describe, it, expect } from 'vitest';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, unlinkSync, utimesSync, writeFileSync } from 'fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, unlinkSync, utimesSync, writeFileSync } from 'fs';
 import { spawn } from 'child_process';
 import net from 'net';
 import { homedir, tmpdir } from 'os';
@@ -438,6 +438,71 @@ describe('Browser launch contracts', () => {
   it('rejects WebMCP in headless mode before launching a browser', async () => {
     await expect(launchBrowser({ webMcp: true, headless: true })).rejects.toThrow('cannot run in headless mode');
   });
+
+  function fakePortBrowser(dir) {
+    const path = join(dir, 'fake-browser.mjs');
+    writeFileSync(path, `#!${process.execPath}
+import { appendFileSync, existsSync, readFileSync, writeFileSync } from 'fs';
+import net from 'net';
+import { join } from 'path';
+const userDataDir = process.argv.find(arg => arg.startsWith('--user-data-dir=')).slice('--user-data-dir='.length);
+const portFile = join(userDataDir, 'DevToolsActivePort');
+const alive = port => new Promise(done => {
+  const socket = net.connect({ host: '127.0.0.1', port });
+  socket.once('connect', () => { socket.destroy(); done(true); });
+  socket.once('error', () => done(false));
+});
+if (existsSync(portFile) && await alive(Number(readFileSync(portFile, 'utf8').split('\\n')[0]))) {
+  appendFileSync(join(userDataDir, 'handed-off'), 'x');
+  process.exit(0);
+}
+const server = net.createServer(socket => socket.destroy());
+server.listen(0, '127.0.0.1', () => {
+  writeFileSync(join(userDataDir, 'fake.pid'), String(process.pid));
+  writeFileSync(portFile, server.address().port + '\\n/devtools/browser/fake-' + process.pid);
+});
+`);
+    chmodSync(path, 0o755);
+    return path;
+  }
+
+  it('marks a browser launched for a named session and keeps the mark while the session reuses it', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'chromex-launch-session-'));
+    const profile = join(dir, 'profile');
+    mkdirSync(profile);
+    const browserPath = fakePortBrowser(dir);
+    const chromeArgs = [`--user-data-dir=${profile}`];
+    const markerPath = join(profile, 'ChromexSessionBrowser.json');
+    const stopFake = () => { try { process.kill(Number(readFileSync(join(profile, 'fake.pid'), 'utf8'))); } catch {} };
+    const handedOff = () => existsSync(join(profile, 'handed-off')) ? readFileSync(join(profile, 'handed-off'), 'utf8').length : 0;
+    const waitForHandOffs = async count => {
+      const deadline = Date.now() + 5000;
+      while (handedOff() < count && Date.now() < deadline) await new Promise(resolveWait => setTimeout(resolveWait, 25));
+    };
+
+    try {
+      const first = await launchBrowser({ browserPath, chromeArgs, session: 'qa' });
+      const marker = JSON.parse(readFileSync(markerPath, 'utf8'));
+      const reused = await launchBrowser({ browserPath, chromeArgs, session: 'qa' });
+      const unnamedReuse = await launchBrowser({ browserPath, chromeArgs });
+      await waitForHandOffs(2);
+      stopFake();
+      await new Promise(resolveWait => setTimeout(resolveWait, 200));
+      const unnamedFresh = await launchBrowser({ browserPath, chromeArgs });
+
+      expect(first).toMatchObject({ reused: false, sessionBrowser: true });
+      expect(marker).toEqual({ session: 'qa', endpoint: first.endpoint });
+      expect(reused).toMatchObject({ endpoint: first.endpoint, reused: true, sessionBrowser: true });
+      expect(reused.text).toContain('Browser already running for profile');
+      expect(unnamedReuse).toMatchObject({ endpoint: first.endpoint, reused: true, sessionBrowser: true });
+      expect(unnamedFresh.endpoint).not.toBe(first.endpoint);
+      expect(unnamedFresh).toMatchObject({ reused: false, sessionBrowser: false });
+      expect(existsSync(markerPath)).toBe(false);
+    } finally {
+      stopFake();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }, 30000);
 });
 
 function stateCdp() {
@@ -991,8 +1056,8 @@ describe('Named session persistence', () => {
     return `ws://127.0.0.1:${port}/devtools/browser/${profile}`;
   }
 
-  function writeSessions(home, sessions) {
-    writeFileSync(join(home, '.chromex', 'sessions.json'), JSON.stringify({ version: 1, sessions }));
+  function markSessionBrowser(home, profile, endpoint) {
+    writeFileSync(join(home, '.chromex', 'profiles', profile, 'ChromexSessionBrowser.json'), JSON.stringify({ session: profile, endpoint }));
   }
 
   async function defaultEndpoint(home) {
@@ -1034,13 +1099,13 @@ describe('Named session persistence', () => {
       const ownedEndpoint = writePortFile(home, 'qa', owned.port, 1_900_000_000);
       expect(await defaultEndpoint(home)).toBe(ownedEndpoint);
 
-      writeSessions(home, { qa: { name: 'qa', endpoint: ownedEndpoint, ownsBrowser: true } });
+      markSessionBrowser(home, 'qa', ownedEndpoint);
       expect(await defaultEndpoint(home)).toBe(sharedEndpoint);
 
-      writeSessions(home, { checkout: { name: 'checkout', endpoint: ownedEndpoint, ownsBrowser: false } });
+      markSessionBrowser(home, 'qa', 'ws://127.0.0.1:9/devtools/browser/previous-run');
       expect(await defaultEndpoint(home)).toBe(ownedEndpoint);
 
-      writeSessions(home, { qa: { name: 'qa', endpoint: ownedEndpoint, ownsBrowser: true } });
+      markSessionBrowser(home, 'qa', ownedEndpoint);
       await new Promise(resolveClose => shared.server.close(resolveClose));
       expect(await defaultEndpoint(home)).toBe(ownedEndpoint);
     } finally {

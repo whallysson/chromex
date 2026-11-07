@@ -336,7 +336,7 @@ async function main() {
     if (options['browser-path']) { options.browserPath = options['browser-path']; delete options['browser-path']; }
     if (options['extension-tools']) { options.extensionTools = true; delete options['extension-tools']; }
     if (options.webmcp) { options.webMcp = true; delete options.webmcp; }
-    const result = await launchBrowser(options);
+    const result = await launchBrowser({ ...options, session: sessionName || undefined });
     const sessionNote = sessionName && result.endpoint ? `\n${await claimLaunchedBrowser(sessionName, result, options.url)}` : '';
     printEnvelope({ ok: true, command: cmd, text: `${result.text}${sessionNote}` }, parsed.options);
     return;
@@ -360,7 +360,7 @@ async function main() {
         targetId: result.targetId,
         browserContextId: result.browserContextId,
         url: args[0] || 'about:blank',
-        ...sessionBrowser(getSession(config, sessionName), endpoint),
+        endpoint,
       });
     }
     printEnvelope({ ok: true, command: cmd, target: result.targetId, text: result.message, data: result }, parsed.options);
@@ -381,7 +381,7 @@ async function main() {
         const statePath = previousSession?.statePath || sessionStatePath(sessionName);
         const { browserContextId } = await cdp.send('Target.createBrowserContext', { disposeOnDetach: false });
         const { targetId } = await cdp.send('Target.createTarget', { url: args[0], browserContextId });
-        setSession(config, sessionName, { targetId, browserContextId, url: args[0], statePath, ...sessionBrowser(previousSession, endpoint) });
+        setSession(config, sessionName, { targetId, browserContextId, url: args[0], statePath, endpoint });
         const pages = await getPages(cdp);
         writePagesCache(config._pagesCachePath, pages);
         result = `Session "${sessionName}" opened (targetId: ${targetId.slice(0, 8)}). URL: ${args[0]}`;
@@ -656,24 +656,13 @@ async function pagesWithTarget(prefix) {
   return pages;
 }
 
-/**
- * Browser fields for a session record. A session keeps owning its browser only while it stays in
- * the browser it launched, so a session that moved never hides a shared browser from other clients.
- */
-function sessionBrowser(previous, endpoint) {
-  return { endpoint, ownsBrowser: !!previous?.ownsBrowser && previous.endpoint === endpoint };
-}
-
 async function claimLaunchedBrowser(name, launched, url) {
-  const previous = getSession(config, name);
   const cdp = new CDP(config.commandTimeout);
   await cdp.connect(launched.endpoint);
   const pages = await getPages(cdp).finally(() => cdp.close());
   const page = pages.find(item => url && (item.url === url || item.url === `${url}/`)) || pages.at(-1) || null;
-  const ownsBrowser = !launched.reused || (!!previous?.ownsBrowser && previous.endpoint === launched.endpoint);
   setSession(config, name, {
     endpoint: launched.endpoint,
-    ownsBrowser,
     targetId: page?.targetId ?? null,
     browserContextId: null,
     url: page?.url || url || 'about:blank',

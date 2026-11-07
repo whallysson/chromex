@@ -598,7 +598,7 @@ chromex -s qa snap --refs
 chromex -s qa close
 ```
 
-`launch` with `-s` makes the first tab the session tab. A browser launched for a session is never chosen as the default browser for other clients while another browser answers. Commands without `-s` keep using the most recently launched browser, so prefer named sessions when several agents share one machine.
+`launch` with `-s` makes the first tab the session tab. A browser launched for a session is marked in its profile and is never chosen as the default browser for other clients while another browser answers. When that profile's browser is still running, `launch` reuses it, keeps the mark, and opens `--url` in a new tab, so a session can close its tab at the end of a run and launch again next time. Commands without `-s` keep using the most recently launched browser, so prefer named sessions when several agents share one machine.
 
 `chromex show --annotate` generates a local dashboard with screenshot previews, region/point marking, per-mark notes, and JSON export. Browsers with File System Access support can save the exported pack directly; other browsers download the JSON file.
 

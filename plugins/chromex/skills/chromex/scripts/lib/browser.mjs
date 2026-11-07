@@ -1,12 +1,11 @@
 // Browser detection and page listing
 import { chmodSync, readFileSync, existsSync, readdirSync, statSync, writeFileSync } from 'fs';
-import { resolve } from 'path';
+import { dirname, resolve } from 'path';
 import { homedir } from 'os';
 import net from 'net';
 import { checkDomain } from './security.mjs';
 import { redactText, redactUrl } from './redaction.mjs';
 import { getDisplayPrefixLength } from './utils.mjs';
-import { loadSessions } from './sessions.mjs';
 import { CDP } from './client.mjs';
 
 // Generate candidates for each browser: base path plus Default/ subfolder
@@ -17,6 +16,7 @@ function candidates(base) {
 const home = homedir();
 const CHROMEX_PROFILES_DIR = resolve(home, '.chromex/profiles');
 const PIPE_MARKER = 'ChromexPipeActive.json';
+export const SESSION_BROWSER_MARKER = 'ChromexSessionBrowser.json';
 const DEVTOOLS_CANDIDATES = [
   // Brave
   ...candidates(resolve(home, 'Library/Application Support/BraveSoftware/Brave-Browser')),
@@ -101,12 +101,11 @@ export async function resolveWsUrl(config = {}) {
   ].sort((a, b) => {
     try { return statSync(b.path).mtimeMs - statSync(a.path).mtimeMs; } catch { return 0; }
   });
-  const sessionBrowsers = sessionOwnedEndpoints(config);
   let sessionBrowser = null;
   for (const candidate of candidates) {
     const endpoint = await liveCandidateEndpoint(candidate);
     if (!endpoint) continue;
-    if (!sessionBrowsers.has(endpoint)) return endpoint;
+    if (!launchedForSession(candidate, endpoint)) return endpoint;
     sessionBrowser ??= endpoint;
   }
   if (sessionBrowser) return sessionBrowser;
@@ -172,11 +171,13 @@ async function liveCandidateEndpoint(candidate) {
   }
 }
 
-function sessionOwnedEndpoints(config) {
-  if (!config._sessionsPath) return new Set();
-  return new Set(Object.values(loadSessions(config).sessions)
-    .filter(record => record.ownsBrowser && record.endpoint)
-    .map(record => record.endpoint));
+function launchedForSession(candidate, endpoint) {
+  try {
+    const marker = JSON.parse(readFileSync(resolve(dirname(candidate.path), SESSION_BROWSER_MARKER), 'utf8'));
+    return marker.endpoint === endpoint;
+  } catch {
+    return false;
+  }
 }
 
 export async function getPagesHttp(config = {}) {
