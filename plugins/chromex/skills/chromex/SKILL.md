@@ -180,7 +180,7 @@ chromex.mjs pdf     <target> [file]             # export as PDF
 
 ```bash
 chromex.mjs throttle <target> <preset|reset>    # 3g, slow-3g, 4g, offline, custom
-chromex.mjs intercept <target> <action> [args]  # block, mock, on, off, rules
+chromex.mjs intercept <target> <action> [args]  # block, mock, on, off, rules (with hits per rule)
 chromex.mjs intercept <target> mock "/api/user" --status=200 --content-type=application/json --body='{"ok":true}'
 chromex.mjs intercept <target> mock "/api/slow" --delay=750 --status=503 --body='unavailable'
 chromex.mjs intercept <target> block "*.tracker.*" --abort=blockedbyclient
@@ -349,7 +349,7 @@ This tells you there is content below/above that requires `scroll` to reveal. On
 - Use `fill` for form fields -- handles React/Vue/Angular controlled inputs
 - Use `launch` to skip Chrome's "Allow debugging" modal entirely
 - Use `wait networkidle` for SPAs that load data asynchronously
-- Use `intercept mock` to test with fake API responses
+- Use `intercept mock` to test with fake API responses. A pattern that starts with `/` matches the URL path; check `intercept rules` hits to prove a request was caught
 - When a command opens a dialog it returns at once with the dialog text: answer with `dialog accept` or `dialog dismiss` instead of repeating the command
 - `dialog auto` accepts dialogs as they open; read `dialog log` afterwards to check what they said
 - When other agents may use Chromex on the same machine, run your own browser as a named session (`chromex -s <name> launch --headless --profile <name> --url <url>`, then `chromex -s <name> <command>` without a target): the session stays in its browser and does not become the default browser for anyone else

@@ -18,14 +18,14 @@ export async function interceptStr(cdp, sid, action, pattern, ...rest) {
         markHandler(cdp, sid);
       }
       if (options.removeHeaders.length > 0) {
-        rules.push({ type: 'headers', pattern: pattern || '*', removeHeaders: options.removeHeaders });
+        rules.push({ type: 'headers', pattern: pattern || '*', removeHeaders: options.removeHeaders, hits: 0 });
       }
       return `Interception enabled${pattern ? ` for ${pattern}` : ' for all requests'}.`;
     }
 
     case 'block': {
       if (!pattern) throw new Error('URL pattern required');
-      rules.push({ type: 'block', pattern, abort: options.abort || 'BlockedByClient' });
+      rules.push({ type: 'block', pattern, abort: options.abort || 'BlockedByClient', hits: 0 });
       await ensureFetch(cdp, sid);
       return `Blocking requests matching: ${pattern} (${rules.length} rule(s) total)`;
     }
@@ -42,6 +42,7 @@ export async function interceptStr(cdp, sid, action, pattern, ...rest) {
         headers: options.headers,
         contentType: options.contentType,
         delay: options.delay,
+        hits: 0,
       });
       await ensureFetch(cdp, sid);
       return `Mocking ${pattern} with custom response (${rules.length} rule(s) total)`;
@@ -92,6 +93,7 @@ function registerHandler(cdp, sid) {
 
     for (const rule of rules) {
       if (!urlMatches(url, rule.pattern)) continue;
+      rule.hits = (rule.hits || 0) + 1;
       if (rule.type === 'block') {
         try { await cdp.send('Fetch.failRequest', { requestId, errorReason: rule.abort || 'BlockedByClient' }, sid); } catch {}
         return;
@@ -177,7 +179,7 @@ function filterHeaders(headers, removeHeaders) {
 }
 
 function formatRule(rule, index) {
-  const parts = [`${index + 1}. ${rule.type.toUpperCase()} ${rule.pattern}`];
+  const parts = [`${index + 1}. ${rule.type.toUpperCase()} ${rule.pattern} hits:${rule.hits || 0}`];
   if (rule.status) parts.push(`status:${rule.status}`);
   if (rule.contentType) parts.push(`content-type:${rule.contentType}`);
   if (rule.delay) parts.push(`delay:${rule.delay}`);
@@ -187,8 +189,26 @@ function formatRule(rule, index) {
   return parts.join(' ');
 }
 
+/**
+ * Pattern forms: a full URL glob (with a scheme) or a pattern that starts with `*` matches the whole URL;
+ * a pattern that starts with `/` matches the URL path, whatever the query; any other text matches anywhere.
+ */
 function urlMatches(url, pattern) {
   if (pattern === '*') return true;
+  if (pattern.startsWith('/')) return globMatches(urlPath(url), pattern);
+  if (pattern.startsWith('*') || /^[a-z][a-z0-9+.-]*:\/\//i.test(pattern)) return globMatches(url, pattern);
+  return globMatches(url, `*${pattern}*`);
+}
+
+function globMatches(value, pattern) {
   const regex = new RegExp('^' + pattern.replace(/[.+^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*').replace(/\?/g, '.') + '$', 'i');
-  return regex.test(url);
+  return regex.test(value);
+}
+
+function urlPath(url) {
+  try {
+    return new URL(url).pathname;
+  } catch {
+    return url;
+  }
 }

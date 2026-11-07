@@ -168,6 +168,7 @@ Usage: chromex [--raw] [--json] [-s name] <command> [args]
   NETWORK
     throttle <target> <preset|reset>    Throttle: 3g, slow-3g, 4g, offline, custom, reset
     intercept <target> <action> [args]  Intercept: on, block, mock, off, rules
+      /path matches the URL path; *glob or https://... the whole URL; other text, anywhere. rules shows hits
       mock supports --status --content-type --header --body --delay
       block supports --abort; on supports --remove-header
     har     <target> start|stop [file]  Record HTTP traffic as HAR file

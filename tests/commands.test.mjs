@@ -1440,6 +1440,61 @@ describe('Advanced intercept command', () => {
     expect(Buffer.from(fulfill.params.body, 'base64').toString()).toBe('ok');
   });
 
+  async function interceptOutcomes(cdp, urls) {
+    const outcomes = [];
+    for (const [index, url] of urls.entries()) {
+      cdp.sent.length = 0;
+      cdp.emit('Fetch.requestPaused', { requestId: `req${index}`, request: { url, headers: {} } });
+      await new Promise(resolve => setTimeout(resolve, 5));
+      outcomes.push(cdp.sent.find(call => call.method.startsWith('Fetch.') && call.method !== 'Fetch.enable')?.method);
+    }
+    return outcomes;
+  }
+
+  it('matches path patterns on the URL path, bare text anywhere, and counts what each rule caught', async () => {
+    const cdp = scriptedCdp();
+    await interceptStr(cdp, 'sid1', 'off');
+    await interceptStr(cdp, 'sid1', 'block', '/api/messages/send');
+    await interceptStr(cdp, 'sid1', 'block', '/api/conversations/*/messages');
+    await interceptStr(cdp, 'sid1', 'block', 'send_sms_batch');
+
+    const outcomes = await interceptOutcomes(cdp, [
+      'https://app.example.test/api/messages/send',
+      'https://app.example.test/api/messages/send?customer=1',
+      'https://app.example.test/api/conversations/42/messages',
+      'https://app.example.test/legacy/send_sms_batch.php?batch=7',
+      'https://app.example.test/api/messages/send-later',
+      'https://app.example.test/settings/save',
+    ]);
+    const rules = await interceptStr(cdp, 'sid1', 'rules');
+
+    expect(outcomes).toEqual([
+      'Fetch.failRequest', 'Fetch.failRequest', 'Fetch.failRequest', 'Fetch.failRequest',
+      'Fetch.continueRequest', 'Fetch.continueRequest',
+    ]);
+    expect(rules).toContain('1. BLOCK /api/messages/send hits:2');
+    expect(rules).toContain('2. BLOCK /api/conversations/*/messages hits:1');
+    expect(rules).toContain('3. BLOCK send_sms_batch hits:1');
+  });
+
+  it('keeps full URL and leading wildcard patterns anchored to the whole URL', async () => {
+    const cdp = scriptedCdp();
+    await interceptStr(cdp, 'sid1', 'off');
+    await interceptStr(cdp, 'sid1', 'block', 'https://cdn.example.test/*.png');
+    await interceptStr(cdp, 'sid1', 'block', '*/api/users');
+
+    const outcomes = await interceptOutcomes(cdp, [
+      'https://cdn.example.test/img/a.png',
+      'https://cdn.example.test/img/a.png?v=2',
+      'https://other.example.test/?next=https://cdn.example.test/a.png',
+      'https://app.example.test/api/users',
+      'https://app.example.test/api/users/7',
+    ]);
+
+    expect(outcomes).toEqual(['Fetch.failRequest', 'Fetch.continueRequest', 'Fetch.continueRequest', 'Fetch.failRequest', 'Fetch.continueRequest']);
+    expect(await interceptStr(cdp, 'sid1', 'rules')).toContain('2. BLOCK */api/users hits:1');
+  });
+
   it('removes sensitive request headers before continuing', async () => {
     const cdp = scriptedCdp();
 

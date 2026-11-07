@@ -109,27 +109,38 @@ This modifies the real request and should be used only when the test explicitly 
 ### Manage Rules
 
 ```bash
-# List active interception rules
+# List active interception rules and how many requests each one caught
 chromex intercept <target> rules
 # Output:
-# 1. BLOCK *.google-analytics.com*
-# 2. MOCK /api/user -> {"id":1,"name":"Test User","role":"admin"}
+# 1. BLOCK *.google-analytics.com* hits:3 abort:BlockedByClient
+# 2. MOCK /api/user hits:1 status:200 content-type:application/json -> {"id":1,"name":"Test User","role":"admin"}
 
 # Disable all interception
 chromex intercept <target> off
 ```
 
+`hits` counts the requests a rule caught since it was added, so `hits:0` proves that nothing matching the rule left the page. `off` clears every rule and its count.
+
 ### Pattern Syntax
 
-Patterns use glob-style matching:
-- `*` matches any number of characters
-- `?` matches a single character
-- Matching is case-insensitive
+Patterns use glob-style matching, case-insensitive: `*` matches any number of characters, including `/`, and `?` matches exactly one character. The first character decides what the pattern is compared with:
+
+| Pattern | Compared with | Example | Matches |
+|---------|---------------|---------|---------|
+| Starts with `/` | The URL path, whatever the query string | `/api/users` | `https://app.test/api/users` and `https://app.test/api/users?page=2`, not `/api/users/7` |
+| Starts with `*` or has a scheme (`https://`) | The whole URL, anchored at both ends | `https://cdn.example.com/*.js` | `https://cdn.example.com/app.js`, not `https://cdn.example.com/app.js?v=2` |
+| Anything else | Any part of the URL | `google-analytics.com` | Any URL that contains it |
 
 Examples:
-- `*.analytics.*` -- blocks any URL containing "analytics"
-- `/api/users/*` -- matches API paths
-- `https://cdn.example.com/*.js` -- matches specific JS files
+- `/api/users/*` -- every path under `/api/users/`
+- `*.analytics.*` -- any URL with an `.analytics.` host part
+- `https://cdn.example.com/*.js*` -- JavaScript files from that host, with or without a query string
+
+To match a query string, use a whole-URL pattern, for example `*/search?q=*`.
+
+### Scope
+
+Rules apply to requests made by the tab the daemon is attached to: documents, form submissions, XHR, `fetch`, scripts, and images. They do not reach other tabs or pop-ups, service workers, or anything the server does on its own, such as scheduled jobs or queues. Check `intercept rules` before an action that must not reach the server, and read the hit count afterwards.
 
 ## HAR Recording
 
