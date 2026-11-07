@@ -1,5 +1,5 @@
 import { existsSync, mkdirSync, writeFileSync } from 'fs';
-import { redactCommandArgs, redactObject, redactText, redactUrl } from '../redaction.mjs';
+import { REDACTED, redactCommandArgs, redactObject, redactText, redactUrl } from '../redaction.mjs';
 import { dirname, relative } from 'path';
 import { resolveArtifactPath, resolveChromexPath, timestamp } from '../artifacts.mjs';
 import { htmlStr } from './html.mjs';
@@ -44,14 +44,25 @@ export function recordEvidenceDialog(state, entry) {
 
 export function recordEvidenceAction(state, command, args, ok, text) {
   if (!state.active || command === 'evidence') return;
+  const safeArgs = sanitizeArgs(command, args);
   state.active.timeline.push({
     type: 'action',
     ts: new Date().toISOString(),
     command,
-    args: sanitizeArgs(command, args),
+    args: safeArgs,
     ok: !!ok,
-    text: redactText(text, { maxLength: 500 }),
+    text: redactText(maskHiddenArgs(text, args, safeArgs), { maxLength: 500 }),
   });
+}
+
+/**
+ * Commands repeat some arguments in their output, such as the value that fill typed,
+ * so every argument the redacted copy leaves out is masked in the text as well.
+ */
+function maskHiddenArgs(text, args, safeArgs) {
+  const shown = new Set(safeArgs);
+  const hidden = [...new Set(args.map(String).filter(value => value && !shown.has(value)))].sort((a, b) => b.length - a.length);
+  return hidden.reduce((masked, value) => masked.split(value).join(REDACTED), String(text ?? ''));
 }
 
 async function startEvidence(cdp, sid, targetId, state, name, context) {

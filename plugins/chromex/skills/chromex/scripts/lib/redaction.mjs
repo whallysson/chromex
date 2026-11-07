@@ -1,4 +1,4 @@
-const REDACTED = '<redacted>';
+export const REDACTED = '<redacted>';
 const SENSITIVE_HEADERS = /^(authorization|proxy-authorization|cookie|set-cookie|x-api-key|x-auth-token|x-access-token)$/i;
 const SENSITIVE_KEYS = /(pass(word)?|secret|token|api[-_]?key|authorization|credential|cookie|session|private[-_]?key)/i;
 const FULLY_SENSITIVE_COMMANDS = new Set(['eval', 'evalraw', 'form', 'inject']);

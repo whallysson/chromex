@@ -1150,6 +1150,27 @@ describe('Evidence pack command', () => {
     }
   });
 
+  it('masks the redacted arguments that a command repeats in its output', async () => {
+    await withArtifactRoot('chromex-evidence-echo-', async () => {
+      const state = { active: null, last: null };
+      const cdp = evidenceCdp();
+
+      await evidenceStr(cdp, 'sid1', 'target1', state, 'start', 'sign in', {});
+      recordEvidenceAction(state, 'fill', ['#password', 'hunter2-example'], true, 'Filled <INPUT> with "hunter2-example"\n\n@e2 [textbox] Password');
+      recordEvidenceAction(state, 'dialog', ['accept', 'Ada', 'Lovelace'], true, 'Dialog accepted: prompt #1 "Name?" with text "Ada Lovelace".');
+      recordEvidenceAction(state, 'type', ['hunter2-example'], false, 'Cannot type "hunter2-example": no focused element');
+      const output = await evidenceStr(cdp, 'sid1', 'target1', state, 'stop', 'signed in', {});
+      const actions = JSON.parse(readFileSync(join(output.data.root, 'timeline.json'), 'utf8')).filter(item => item.type === 'action');
+
+      expect(actions.map(item => item.text)).toEqual([
+        'Filled <INPUT> with "<redacted>"\n\n@e2 [textbox] Password',
+        'Dialog accepted: prompt #1 "Name?" with text "<redacted> <redacted>".',
+        'Cannot type "<redacted>": no focused element',
+      ]);
+      expect(readFileSync(output.data.evidence, 'utf8')).not.toMatch(/hunter2-example|Ada|Lovelace/);
+    });
+  });
+
   it('keeps only the console, network and dialogs recorded while the pack was open', async () => {
     await withArtifactRoot('chromex-evidence-window-', async () => {
       const state = { active: null, last: null };
