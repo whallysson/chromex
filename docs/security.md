@@ -157,7 +157,7 @@ To disable:
 
 ## Sensitive Output Redaction
 
-Page URLs, request and response headers, textual bodies, console messages, JavaScript dialog text, extension storage, third-party developer tools, and WebMCP output redact secret-shaped values by default. Prompt answers in the dialog log are hidden entirely. The original values still reach the browser and application under test.
+Page URLs, request and response headers, textual bodies, console messages, JavaScript dialog text, extension storage, third-party developer tools, and WebMCP output redact secret-shaped values by default. Prompt answers in the dialog log are hidden entirely. Password fields are recognized by common names in several languages, such as `password`, `pwd`, `senha`, `contraseña`, `kennwort`, `wachtwoord`, and `şifre`. The original values still reach the browser and application under test.
 
 Use `--include-sensitive` in the CLI or `includeSensitive: true` in MCP only for the live response that requires exact values. Network detail bodies default to 2,000 characters and can be expanded up to 1,000,000 with `--body-limit=N` or MCP `bodyLimit`.
 

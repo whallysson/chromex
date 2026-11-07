@@ -1,6 +1,10 @@
 export const REDACTED = '<redacted>';
 const SENSITIVE_HEADERS = /^(authorization|proxy-authorization|cookie|set-cookie|x-api-key|x-auth-token|x-access-token)$/i;
-const SENSITIVE_KEYS = /(pass(word)?|secret|token|api[-_]?key|authorization|credential|cookie|session|private[-_]?key)/i;
+/** Password field names beyond pass, passwd and password: an abbreviation and the common names in other languages. */
+const PASSWORD_NAMES = 'pwd|senha|contrase(?:n|ñ)a|clave|kennwort|wachtwoord|(?:s|ş)ifre';
+const SENSITIVE_KEYS = new RegExp(`(pass(word)?|${PASSWORD_NAMES}|secret|token|api[-_]?key|authorization|credential|cookie|session|private[-_]?key)`, 'i');
+const SENSITIVE_QUERY_VALUE = new RegExp(`([?&](?:password|passwd|${PASSWORD_NAMES}|secret|token|api[-_]?key|authorization|credential|session)=)[^&#\\s]*`, 'gi');
+const SENSITIVE_ASSIGNMENT = new RegExp(`("?[A-Za-z0-9_-]*(?:password|passwd|${PASSWORD_NAMES}|secret|token|api[-_]?key|authorization|credential|cookie|session)[A-Za-z0-9_-]*"?\\s*[:=]\\s*)"?[^",}\\s]+"?`, 'gi');
 const FULLY_SENSITIVE_COMMANDS = new Set(['eval', 'evalraw', 'form', 'inject']);
 
 export function redactCommandArgs(command, args = []) {
@@ -66,8 +70,8 @@ function sanitizeValue(value) {
 function sanitizeRaw(value) {
   return String(value ?? '')
     .replace(/\b(Bearer|Basic)\s+[A-Za-z0-9._~+/=-]+/gi, `$1 ${REDACTED}`)
-    .replace(/([?&](?:password|passwd|secret|token|api[-_]?key|authorization|credential|session)=)[^&#\s]*/gi, `$1${REDACTED}`)
-    .replace(/("?[A-Za-z0-9_-]*(?:password|passwd|secret|token|api[-_]?key|authorization|credential|cookie|session)[A-Za-z0-9_-]*"?\s*[:=]\s*)"?[^",}\s]+"?/gi, `$1${REDACTED}`);
+    .replace(SENSITIVE_QUERY_VALUE, `$1${REDACTED}`)
+    .replace(SENSITIVE_ASSIGNMENT, `$1${REDACTED}`);
 }
 
 function truncate(value) {

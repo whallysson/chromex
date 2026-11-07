@@ -106,6 +106,19 @@ describe('sensitive data redaction', () => {
     });
   });
 
+  it('redacts password fields named with abbreviations and in other languages', () => {
+    const fields = { pwd: 'a1', senha: 'b2', contrasena: 'c3', 'contraseña': 'd4', clave: 'e5', kennwort: 'f6', wachtwoord: 'g7', sifre: 'h8', 'şifre': 'i9' };
+
+    expect(redactObject({ ...fields, user: 'ada', hasLoaded: true })).toEqual({
+      ...Object.fromEntries(Object.keys(fields).map(key => [key, '<redacted>'])),
+      user: 'ada',
+      hasLoaded: true,
+    });
+    expect(redactObject({ postData: 'user=ada&senha=letmein' }).postData).toBe('user=ada&senha=<redacted>');
+    expect(redactObject({ postData: 'senha=letmein&user=ada' }).postData).not.toContain('letmein');
+    expect(redactUrl('https://example.test/sign-in?user=ada&wachtwoord=letmein')).toContain('wachtwoord=%3Credacted%3E');
+  });
+
   it('preserves complete non-sensitive values while redacting secrets', () => {
     const description = 'a'.repeat(500);
 
