@@ -128,7 +128,7 @@ describe('MCP Protocol', () => {
     expect(r.result.protocolVersion).toBe('2025-03-26');
     expect(r.result.capabilities).toEqual({ tools: { listChanged: false } });
     expect(r.result.serverInfo.name).toBe('chromex');
-    expect(r.result.serverInfo.version).toBe('1.10.0');
+    expect(r.result.serverInfo.version).toBe('1.11.0');
   });
 
   it('negotiates unknown protocol versions to the latest supported version', async () => {
