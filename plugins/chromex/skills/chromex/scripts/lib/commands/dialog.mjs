@@ -1,10 +1,9 @@
 // JavaScript dialogs: per-tab log, auto-accept mode, and answers to the open dialog
 
 import { emptyState, aggregate } from '../output.mjs';
-import { redactText, redactUrl } from '../redaction.mjs';
+import { REDACTED, redactText, redactUrl } from '../redaction.mjs';
 
 const MAX_DIALOGS = 200;
-const REDACTED = '<redacted>';
 const USAGE = 'Usage: dialog <target> accept [text] | dismiss | auto [on|off] | log [--limit=N] [--include-sensitive] | clear';
 const COMMANDS_FREE_DURING_DIALOG = new Set(['dialog', 'stats', 'open', 'close', 'focus', 'stop', 'list_raw']);
 const ACTIONS_FREE_DURING_DIALOG = { console: ['list', 'detail'], evidence: ['', 'status', 'replay'] };
