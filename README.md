@@ -633,7 +633,15 @@ chromex evidence <target> stop
 chromex evidence <target> replay
 ```
 
-Each pack is written under `~/.chromex/artifacts/<workspace>/evidence/` and includes screenshots, accessibility snapshots with boxes, HTML captures, console JSON, network JSON, action timeline, `evidence.json`, and `index.html` for local replay. Values passed to `fill`, `type`, and `form` are redacted from the action timeline.
+Each pack is written under `~/.chromex/artifacts/<workspace>/evidence/` and includes screenshots, accessibility snapshots with boxes, HTML captures, console JSON, network JSON, dialog JSON, action timeline, `evidence.json`, and `index.html` for local replay. Values passed to `fill`, `type`, and `form` are redacted from the action timeline.
+
+The console, network, and dialog files hold only what was recorded while the pack was open, so one pack per test scenario shows that scenario alone. Pass `--dir` to `start` or `capture` to write the pack into your own folder, such as a CI artifacts directory; Chromex refuses a directory that already holds a pack:
+
+```bash
+chromex evidence <target> start scenario-1 --dir=./artifacts/evidence/scenario-1
+```
+
+Screenshots, snapshots, and HTML show the page as it was, unmasked. Keep packs from pages with real personal data out of public tickets and repositories.
 
 ## Application State Suite
 

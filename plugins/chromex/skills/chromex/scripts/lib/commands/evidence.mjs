@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, writeFileSync } from 'fs';
 import { redactCommandArgs, redactObject, redactText, redactUrl } from '../redaction.mjs';
 import { dirname, relative } from 'path';
-import { resolveArtifactPath, timestamp } from '../artifacts.mjs';
+import { resolveArtifactPath, resolveChromexPath, timestamp } from '../artifacts.mjs';
 import { htmlStr } from './html.mjs';
 import { snapshotStr } from './snapshot.mjs';
 import { publicDialog } from './dialog.mjs';
@@ -59,8 +59,7 @@ async function startEvidence(cdp, sid, targetId, state, name, context) {
   const safeNameValue = redactText(name, { maxLength: 200 });
   const safe = safeName(safeNameValue);
   const startedAt = new Date().toISOString();
-  const rootFile = resolveArtifactPath(null, 'evidence', `${safe}-${timestamp()}/evidence.json`);
-  const root = dirname(rootFile);
+  const root = context.dir ? packDirectory(context.dir) : dirname(resolveArtifactPath(null, 'evidence', `${safe}-${timestamp()}/evidence.json`));
   for (const dir of ['screenshots', 'snapshots', 'html']) mkdirSync(`${root}/${dir}`, { recursive: true, mode: 0o700 });
   state.active = {
     version: 1,
@@ -168,16 +167,25 @@ async function pageInfo(cdp, sid) {
   return value || { url: '', title: '', viewport: null };
 }
 
+/**
+ * Writes the console, network and dialog records of the pack's own time window: the daemon keeps
+ * everything since it started, and earlier activity would read as part of this pack.
+ */
 async function writeRuntimeFiles(pack, context) {
   const consolePath = `${pack.root}/console.json`;
   const networkPath = `${pack.root}/network.json`;
   const timelinePath = `${pack.root}/timeline.json`;
   const dialogsPath = `${pack.root}/dialogs.json`;
-  const networkEntries = context.networkRequests ? [...context.networkRequests.entries()] : [];
-  writeFileSync(consolePath, JSON.stringify(redactObject(context.consoleMessages || []), null, 2), { mode: 0o600 });
+  const since = Date.parse(pack.startedAt);
+  const consoleEntries = (context.consoleMessages || []).filter(message => !(message.ts < since));
+  const networkEntries = context.networkRequests
+    ? [...context.networkRequests.entries()].filter(([, request]) => !(request.wallTime * 1000 < since))
+    : [];
+  const dialogEntries = (context.dialogs || []).filter(entry => entry.result === 'open' || !(Date.parse(entry.closedAt || entry.openedAt) < since));
+  writeFileSync(consolePath, JSON.stringify(redactObject(consoleEntries), null, 2), { mode: 0o600 });
   writeFileSync(networkPath, JSON.stringify(redactObject(networkEntries.map(([id, request]) => ({ id, ...request }))), null, 2), { mode: 0o600 });
   writeFileSync(timelinePath, JSON.stringify(pack.timeline, null, 2), { mode: 0o600 });
-  writeFileSync(dialogsPath, JSON.stringify((context.dialogs || []).map(entry => publicDialog(entry)), null, 2), { mode: 0o600 });
+  writeFileSync(dialogsPath, JSON.stringify(dialogEntries.map(entry => publicDialog(entry)), null, 2), { mode: 0o600 });
   upsertArtifact(pack, { type: 'evidence-console', path: consolePath });
   upsertArtifact(pack, { type: 'evidence-network', path: networkPath });
   upsertArtifact(pack, { type: 'evidence-timeline', path: timelinePath });
@@ -255,6 +263,13 @@ function renderReplay(pack) {
   </main>
 </body>
 </html>`;
+}
+
+function packDirectory(dir) {
+  const root = resolveChromexPath(dir);
+  if (existsSync(`${root}/evidence.json`)) throw new Error(`Directory already holds an evidence pack: ${root}`);
+  mkdirSync(root, { recursive: true, mode: 0o700 });
+  return root;
 }
 
 function timelineText(item) {

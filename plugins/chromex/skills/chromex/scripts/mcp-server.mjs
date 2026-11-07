@@ -249,11 +249,12 @@ const TOOLS = [
     }, ['target', 'selector'], RO),
 
   tool('chromex_evidence',
-    'Create an evidence pack with screenshots, snapshots, HTML, console, network timeline, and local replay HTML.',
+    'Create an evidence pack with screenshots, snapshots, HTML, and the console, network, and dialogs recorded while the pack is open, plus an action timeline and a local replay page.',
     {
       target: P_TARGET,
       action: { type: 'string', enum: ['start', 'mark', 'stop', 'status', 'replay', 'capture'], description: 'Evidence action' },
       label: { type: 'string', description: 'Pack name for start/capture or mark label for mark/stop' },
+      dir: { type: 'string', description: 'For start/capture: absolute directory that receives the pack instead of the Chromex artifact folder. It must not hold another pack.' },
     }, ['target', 'action'], RO),
 
   tool('chromex_issues',
@@ -900,7 +901,7 @@ function toolToCmd(name, p) {
     case 'chromex_domsnapshot': return { cmd: 'domsnapshot', args: p.styles ? ['--styles'] : [] };
     case 'chromex_highlight':  return { cmd: 'highlight', args: [p.selector] };
     case 'chromex_locator':    return { cmd: 'locator', args: [p.selector, p.format ? `--format=${p.format}` : '--format=chromex-test'] };
-    case 'chromex_evidence':   return { cmd: 'evidence', args: [p.action, ...(p.label ? [p.label] : [])] };
+    case 'chromex_evidence':   return { cmd: 'evidence', args: [p.action, ...(p.label ? [p.label] : []), ...(p.dir ? [`--dir=${p.dir}`] : [])] };
     case 'chromex_issues':     return { cmd: 'issues', args: [p.action || 'list'] };
     case 'chromex_inspect':    return { cmd: 'inspect', args: [p.action || 'all', p.selector, ...(p.filter ? [p.filter] : [])] };
     case 'chromex_diagnose':   return { cmd: 'diagnose', args: p.limit != null ? [String(p.limit)] : [] };

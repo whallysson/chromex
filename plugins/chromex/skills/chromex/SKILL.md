@@ -103,6 +103,7 @@ chromex.mjs issues  <target> enable|list|clear|check-forms|disable
 chromex.mjs inspect <target> computed|matched|listeners|box|all <selector>
 chromex.mjs diagnose <target> [limit]           # prioritized runtime diagnosis
 chromex.mjs evidence <target> start checkout    # start evidence pack
+chromex.mjs evidence <target> start checkout --dir=PATH  # write the pack into PATH
 chromex.mjs evidence <target> mark "after login"
 chromex.mjs evidence <target> stop              # finalize replay + JSON pack
 chromex.mjs evidence <target> replay            # show replay path

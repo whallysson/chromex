@@ -15,6 +15,7 @@ import { launchBrowser, incognitoContext } from './lib/launcher.mjs';
 import { openTab, openTabStr, closeTabStr, focusTabStr } from './lib/commands/tab.mjs';
 import { deleteSessionData, formatSessions, getSession, listSessions, removeSession, sessionStatePath, setSession } from './lib/sessions.mjs';
 import { showStr } from './lib/commands/show.mjs';
+import { resolveChromexPath } from './lib/artifacts.mjs';
 
 const PACKAGE_INFO = JSON.parse(readFileSync(new URL('../../../../../package.json', import.meta.url), 'utf8'));
 let config;
@@ -118,6 +119,7 @@ Usage: chromex [--raw] [--json] [-s name] <command> [args]
     domsnapshot <target> [--styles]     Structured DOM snapshot with bounding rects
     highlight <target> <sel|clear>      Highlight element with overlay
     evidence <target> <action> [label]  Evidence pack: start, mark, stop, status, replay, capture
+      start <name> --dir=PATH           Write the pack into PATH (must not hold a pack)
     issues  <target> <action>          Browser issues: enable, list, clear, check-forms, disable
     inspect <target> <action> <sel>    CSS/listeners/box: computed, matched, listeners, box, all
     diagnose <target> [limit]          Prioritized issues, network, console and runtime diagnosis
@@ -486,6 +488,12 @@ async function main() {
     process.exit(1);
   }
 
+  if (cmd === 'evidence') {
+    for (const [index, arg] of cmdArgs.entries()) {
+      if (arg.startsWith('--dir=')) cmdArgs[index] = `--dir=${resolveChromexPath(arg.slice('--dir='.length))}`;
+    }
+  }
+
   if (noSnap) cmdArgs.push('--no-snap');
   if (noHints) cmdArgs.push('--no-hints');
   const response = await sendCommand(conn, { cmd, args: cmdArgs });
@@ -741,17 +749,17 @@ function clearSessionRecords(records) {
 async function restoreSessionState(targetId, statePath) {
   if (!statePath || !existsSync(statePath)) return false;
   const conn = await getOrStartTabDaemon(targetId, config);
-  const response = await sendCommand(conn, { cmd: 'state', args: ['load', statePath] });
+  const response = await sendCommand(conn, { cmd: 'state', args: ['load', statePath], internal: true });
   if (!response.ok) return false;
   const reloadConn = await getOrStartTabDaemon(targetId, config);
-  await sendCommand(reloadConn, { cmd: 'nav', args: ['reload', '--no-snap', '--no-hints'] }).catch(() => {});
+  await sendCommand(reloadConn, { cmd: 'nav', args: ['reload', '--no-snap', '--no-hints'], internal: true }).catch(() => {});
   return true;
 }
 
 async function persistSessionState(targetId, name) {
   const statePath = sessionStatePath(name);
   const conn = await getOrStartTabDaemon(targetId, config);
-  const response = await sendCommand(conn, { cmd: 'state', args: ['save', statePath] });
+  const response = await sendCommand(conn, { cmd: 'state', args: ['save', statePath], internal: true });
   if (!response.ok) return false;
   setSession(config, name, { targetId, statePath });
   return true;

@@ -1149,6 +1149,48 @@ describe('Evidence pack command', () => {
       rmSync(dir, { recursive: true, force: true });
     }
   });
+
+  it('keeps only the console, network and dialogs recorded while the pack was open', async () => {
+    await withArtifactRoot('chromex-evidence-window-', async () => {
+      const state = { active: null, last: null };
+      const cdp = evidenceCdp();
+      const before = Date.now() - 60_000;
+      const dialog = (id, message, openedAt, closedAt, result) => ({ id, type: 'alert', message, url: '', frameId: null, defaultPrompt: null, openedAt, closedAt, result, handledBy: closedAt ? 'auto' : null, userInput: null });
+      const networkRequests = new Map([['earlier', { url: 'https://app.example.test/earlier', method: 'GET', wallTime: before / 1000 }]]);
+      const consoleMessages = [{ id: 0, ts: before, type: 'error', args: ['error from an earlier step'] }];
+      const dialogs = [dialog(1, 'earlier', new Date(before).toISOString(), new Date(before + 50).toISOString(), 'accepted')];
+      const context = { networkRequests, consoleMessages, dialogs };
+
+      await evidenceStr(cdp, 'sid1', 'target1', state, 'start', 'checkout', context);
+      const during = Date.now() + 5;
+      networkRequests.set('during', { url: 'https://app.example.test/during', method: 'POST', wallTime: during / 1000 });
+      consoleMessages.push({ id: 1, ts: during, type: 'log', args: ['checkout step'] });
+      dialogs.push(dialog(2, 'later', new Date(during).toISOString(), null, 'open'));
+      const output = await evidenceStr(cdp, 'sid1', 'target1', state, 'stop', 'fim', context);
+      const read = name => JSON.parse(readFileSync(join(output.data.root, name), 'utf8'));
+
+      expect(read('console.json').map(message => message.args[0])).toEqual(['checkout step']);
+      expect(read('network.json').map(request => request.id)).toEqual(['during']);
+      expect(read('dialogs.json').map(entry => entry.id)).toEqual([2]);
+    });
+  });
+
+  it('writes the pack into the given directory and refuses one that already holds a pack', async () => {
+    await withArtifactRoot('chromex-evidence-dir-', async dir => {
+      const state = { active: null, last: null };
+      const cdp = evidenceCdp();
+      const packDir = join(dir, 'project', 'evidence', 'checkout');
+      const context = { networkRequests: new Map(), consoleMessages: [], dialogs: [], dir: packDir };
+
+      const started = await evidenceStr(cdp, 'sid1', 'target1', state, 'start', 'checkout', context);
+      await evidenceStr(cdp, 'sid1', 'target1', state, 'stop', 'fim', context);
+
+      expect(started.data.root).toBe(packDir);
+      expect(existsSync(join(packDir, 'evidence.json'))).toBe(true);
+      expect(existsSync(join(packDir, 'index.html'))).toBe(true);
+      await expect(evidenceStr(cdp, 'sid1', 'target1', state, 'start', 'checkout', context)).rejects.toThrow('already holds an evidence pack');
+    });
+  });
 });
 
 describe('Dialog command', () => {

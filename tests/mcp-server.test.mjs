@@ -483,6 +483,12 @@ describe('Tool Execution (no browser)', () => {
     expect(request).toMatchObject({ cmd: 'dialog', args: expectedArguments });
   });
 
+  it('passes the pack directory of chromex_evidence to the daemon', async () => {
+    const request = await captureDaemonRequest('chromex_evidence', { action: 'start', label: 'checkout', dir: '/tmp/project/evidence/checkout' });
+
+    expect(request).toMatchObject({ cmd: 'evidence', args: ['start', 'checkout', '--dir=/tmp/project/evidence/checkout'] });
+  });
+
   it('passes the method filter of chromex_intercept to the daemon', async () => {
     const request = await captureDaemonRequest('chromex_intercept', { action: 'block', pattern: '/api/messages/send', method: 'POST' });
 

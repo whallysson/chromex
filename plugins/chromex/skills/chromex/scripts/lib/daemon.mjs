@@ -174,6 +174,7 @@ export async function runDaemon(targetId, config) {
         hasPostData: params.request.hasPostData,
         postData: params.request.postData,
         ts: params.timestamp,
+        wallTime: params.wallTime,
       });
       if (networkRequests.size > 500) networkRequests.delete(networkRequests.keys().next().value);
     });
@@ -269,7 +270,7 @@ export async function runDaemon(targetId, config) {
     if (issuesState.items.length > 1000) issuesState.items.splice(0, 500);
   });
 
-  async function handleCommand({ cmd, args = [] }) {
+  async function handleCommand({ cmd, args = [], internal = false }) {
     resetIdle();
     const startMs = Date.now();
     const auditResult = { ok: true };
@@ -508,10 +509,12 @@ export async function runDaemon(targetId, config) {
           break;
         }
         case 'evidence': {
-          result = await evidenceStr(cdp, sessionId, targetId, evidenceState, args[0], args.slice(1).join(' '), {
+          const dirArg = args.find(arg => arg.startsWith('--dir='));
+          result = await evidenceStr(cdp, sessionId, targetId, evidenceState, args[0], args.slice(1).filter(arg => arg !== dirArg).join(' '), {
             consoleMessages,
             networkRequests,
             dialogs: dialogState.items,
+            dir: dirArg?.slice('--dir='.length),
           });
           break;
         }
@@ -717,8 +720,10 @@ export async function runDaemon(targetId, config) {
         else if (typeof commandResult.data === 'object' && !Array.isArray(commandResult.data)) commandResult.data = { ...commandResult.data, dialogs: dialogs.dialogs };
       }
 
-      sessionStats.record(cmd, args, startMs, Date.now(), true, null);
-      recordEvidenceAction(evidenceState, cmd, args, true, commandResult.text);
+      if (!internal) {
+        sessionStats.record(cmd, args, startMs, Date.now(), true, null);
+        recordEvidenceAction(evidenceState, cmd, args, true, commandResult.text);
+      }
       return {
         ok: true,
         result: commandResult.text ?? '',
@@ -735,8 +740,10 @@ export async function runDaemon(targetId, config) {
       }
       auditResult.ok = false;
       audit(cmd, targetId, args, auditResult, config);
-      sessionStats.record(cmd, args, startMs, Date.now(), false, e.message);
-      recordEvidenceAction(evidenceState, cmd, args, false, e.message);
+      if (!internal) {
+        sessionStats.record(cmd, args, startMs, Date.now(), false, e.message);
+        recordEvidenceAction(evidenceState, cmd, args, false, e.message);
+      }
       return { ok: false, error: e.message };
     }
   }
