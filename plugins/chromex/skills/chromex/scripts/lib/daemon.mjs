@@ -269,7 +269,7 @@ export async function runDaemon(targetId, config) {
     if (issuesState.items.length > 1000) issuesState.items.splice(0, 500);
   });
 
-  async function handleCommand({ cmd, args }) {
+  async function handleCommand({ cmd, args = [] }) {
     resetIdle();
     const startMs = Date.now();
     const auditResult = { ok: true };

@@ -16,7 +16,17 @@
 // If you change any of those rules in daemon.mjs, update this harness too.
 
 import { describe, it, expect } from 'vitest';
+import { spawn, spawnSync } from 'child_process';
+import { existsSync, mkdtempSync, rmSync } from 'fs';
+import { join, resolve } from 'path';
+import { fileURLToPath } from 'url';
 import { generateHints, isRefMapFresh } from '../plugins/chromex/skills/chromex/scripts/lib/hints.mjs';
+
+const TEST_DIR = resolve(fileURLToPath(import.meta.url), '..');
+const SCRIPTS_DIR = resolve(TEST_DIR, '../plugins/chromex/skills/chromex/scripts');
+const CLI_PATH = join(SCRIPTS_DIR, 'chromex.mjs');
+const BROKER_PATH = join(SCRIPTS_DIR, 'lib/browser-pipe-broker.mjs');
+const FAKE_BROWSER_PATH = resolve(TEST_DIR, 'fixtures/fake-pipe-browser.mjs');
 
 // Must stay in sync with AUTO_SNAP_CMDS in daemon.mjs
 const AUTO_SNAP_CMDS = new Set([
@@ -349,4 +359,42 @@ describe('daemon state transitions over a realistic flow', () => {
     d.execute({ cmd: 'nav', args: ['forward'], noSnap: true });
     expect(d.getState().previousFingerprints).toBe(null);
   });
+});
+
+describe('Daemon process lifecycle', () => {
+  async function waitUntil(condition, timeoutMs = 5000) {
+    const deadline = Date.now() + timeoutMs;
+    while (!condition()) {
+      if (Date.now() > deadline) throw new Error('Timed out waiting for condition');
+      await new Promise(resolveWait => setTimeout(resolveWait, 25));
+    }
+  }
+
+  it('exits when the CLI stops it', async () => {
+    const dir = mkdtempSync('/tmp/chromex-daemon-stop-');
+    const browserSocket = join(dir, 'browser.sock');
+    const markerPath = join(dir, 'active.json');
+    const env = { ...process.env, HOME: join(dir, 'home'), XDG_RUNTIME_DIR: join(dir, 'run'), CHROMEX_CDP_URL: `unix://${browserSocket}` };
+    const broker = spawn(process.execPath, [BROKER_PATH], { stdio: ['pipe', 'ignore', 'pipe'] });
+    broker.stdin.end(JSON.stringify({ browserPath: process.execPath, flags: [FAKE_BROWSER_PATH], socketPath: browserSocket, markerPath }));
+    let daemon;
+
+    try {
+      await waitUntil(() => existsSync(markerPath));
+      daemon = spawn(process.execPath, [CLI_PATH, '_daemon', 'target-a'], { env, stdio: 'ignore' });
+      const exited = new Promise(resolveExit => daemon.once('exit', () => resolveExit('exited')));
+      await waitUntil(() => existsSync(join(dir, 'run', 'chromex', 'target-a.sock')));
+
+      const stop = spawnSync(process.execPath, [CLI_PATH, 'stop', 'target-a'], { env, encoding: 'utf8' });
+      const outcome = await Promise.race([exited, new Promise(resolveWait => setTimeout(() => resolveWait('still running'), 3000))]);
+
+      expect(stop.stdout).toContain('Stopped daemon target-a');
+      expect(outcome).toBe('exited');
+      expect(existsSync(join(dir, 'run', 'chromex', 'target-a.sock'))).toBe(false);
+    } finally {
+      daemon?.kill();
+      broker.kill();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }, 15000);
 });
