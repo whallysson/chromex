@@ -6,6 +6,8 @@ import net from 'net';
 import { checkDomain } from './security.mjs';
 import { redactText, redactUrl } from './redaction.mjs';
 import { getDisplayPrefixLength } from './utils.mjs';
+import { loadSessions } from './sessions.mjs';
+import { CDP } from './client.mjs';
 
 // Generate candidates for each browser: base path plus Default/ subfolder
 function candidates(base) {
@@ -99,24 +101,82 @@ export async function resolveWsUrl(config = {}) {
   ].sort((a, b) => {
     try { return statSync(b.path).mtimeMs - statSync(a.path).mtimeMs; } catch { return 0; }
   });
+  const sessionBrowsers = sessionOwnedEndpoints(config);
+  let sessionBrowser = null;
   for (const candidate of candidates) {
-    try {
-      if (candidate.type === 'pipe') {
-        const marker = JSON.parse(readFileSync(candidate.path, 'utf8'));
-        if (marker.socketPath && await canConnectPath(marker.socketPath)) return `unix://${marker.socketPath}`;
-      } else {
-        const wsUrl = getWsUrlFromPortFile(candidate.path);
-        const url = new URL(wsUrl);
-        if (await canConnect(url.hostname, Number(url.port))) return wsUrl;
-      }
-    } catch {}
+    const endpoint = await liveCandidateEndpoint(candidate);
+    if (!endpoint) continue;
+    if (!sessionBrowsers.has(endpoint)) return endpoint;
+    sessionBrowser ??= endpoint;
   }
+  if (sessionBrowser) return sessionBrowser;
 
   throw new Error(
     'Could not find a live DevTools endpoint.\n' +
     'Run: chromex launch\n' +
     'Or configure --cdp-url / CHROMEX_CDP_URL.'
   );
+}
+
+/**
+ * Endpoint of the browser a named session lives in, while that browser still answers and no
+ * endpoint was given explicitly, so the session ignores browsers launched after it.
+ */
+export async function pinnedSessionEndpoint(record, config = {}) {
+  if (!record?.endpoint || configuredEndpoint(config)) return null;
+  return await isEndpointAlive(record.endpoint) ? record.endpoint : null;
+}
+
+export async function isEndpointAlive(endpoint) {
+  if (!endpoint) return false;
+  if (/^unix:\/\//i.test(endpoint)) return canConnectPath(endpoint.slice('unix://'.length));
+  try {
+    const url = new URL(endpoint);
+    return await canConnect(url.hostname, Number(url.port));
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Pages of the browsers that named sessions live in, read from each browser that still answers.
+ */
+export async function sessionBrowserPages(records, config = {}) {
+  const endpoints = new Set(records.map(record => record.endpoint).filter(Boolean));
+  const pages = [];
+  for (const endpoint of endpoints) {
+    if (!await isEndpointAlive(endpoint)) continue;
+    const cdp = new CDP(config.commandTimeout);
+    try {
+      await cdp.connect(endpoint);
+      pages.push(...await getPages(cdp));
+    } catch {
+      continue;
+    } finally {
+      cdp.close();
+    }
+  }
+  return pages;
+}
+
+async function liveCandidateEndpoint(candidate) {
+  try {
+    if (candidate.type === 'pipe') {
+      const marker = JSON.parse(readFileSync(candidate.path, 'utf8'));
+      return marker.socketPath && await canConnectPath(marker.socketPath) ? `unix://${marker.socketPath}` : null;
+    }
+    const wsUrl = getWsUrlFromPortFile(candidate.path);
+    return await isEndpointAlive(wsUrl) ? wsUrl : null;
+  } catch {
+    return null;
+  }
+}
+
+function sessionOwnedEndpoints(config) {
+  if (!config._sessionsPath) return new Set();
+  return new Set(Object.values(loadSessions(config).sessions)
+    .filter(record => record.ownsBrowser && record.endpoint)
+    .map(record => record.endpoint));
 }
 
 export async function getPagesHttp(config = {}) {

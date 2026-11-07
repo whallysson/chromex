@@ -6,7 +6,7 @@ import { createInterface } from 'readline';
 import { existsSync, readFileSync } from 'fs';
 import { loadConfig } from './lib/config.mjs';
 import { CDP } from './lib/client.mjs';
-import { resolveWsUrl, getPages, getPagesHttp, formatPageList, redactPages, writePagesCache } from './lib/browser.mjs';
+import { resolveWsUrl, getPages, getPagesHttp, formatPageList, redactPages, sessionBrowserPages, writePagesCache } from './lib/browser.mjs';
 import { audit } from './lib/security.mjs';
 import { resolvePrefix, listDaemonSockets } from './lib/utils.mjs';
 import { getOrStartTabDaemon, sendCommand, stopDaemons, checkTargetDomain } from './lib/ipc.mjs';
@@ -1171,7 +1171,7 @@ async function executeTool(name, params) {
     const previousClient = browserClient;
     browserClient = null;
     previousClient?.close();
-    return ok(result);
+    return ok(result.text);
   }
 
   if (name === 'chromex_doctor') {
@@ -1204,14 +1204,12 @@ async function executeTool(name, params) {
   }
 
   if (name === 'chromex_sessions') {
+    const records = listSessions(config);
+    const sessionPages = await sessionBrowserPages(records, config);
     return withBrowser(async (cdp) => {
-      const pages = await getPages(cdp);
-      const records = listSessions(config);
+      const pages = [...await getPages(cdp), ...sessionPages];
       return okStructured(formatSessions(records, pages), { sessions: records, pages });
-    }).catch(() => {
-      const records = listSessions(config);
-      return okStructured(formatSessions(records, []), { sessions: records, pages: [] });
-    });
+    }).catch(() => okStructured(formatSessions(records, sessionPages), { sessions: records, pages: sessionPages }));
   }
 
   if (name === 'chromex_show') {

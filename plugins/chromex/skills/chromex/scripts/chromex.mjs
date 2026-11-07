@@ -6,7 +6,7 @@ import { existsSync, readFileSync } from 'fs';
 import { spawn } from 'child_process';
 import { loadConfig } from './lib/config.mjs';
 import { CDP } from './lib/client.mjs';
-import { resolveWsUrl, getPages, getPagesHttp, formatPageList, redactPages, writePagesCache } from './lib/browser.mjs';
+import { resolveWsUrl, getPages, getPagesHttp, formatPageList, pinnedSessionEndpoint, redactPages, sessionBrowserPages, writePagesCache } from './lib/browser.mjs';
 import { audit } from './lib/security.mjs';
 import { resolvePrefix, listDaemonSockets } from './lib/utils.mjs';
 import { runDaemon } from './lib/daemon.mjs';
@@ -81,6 +81,7 @@ Usage: chromex [--raw] [--json] [-s name] <command> [args]
       --extension-tools                 Enable Chrome's unsafe extension debugging domain
       --webmcp                          Enable the experimental WebMCP browser feature
       --chrome-arg FLAG                 Pass custom Chrome flag (e.g. --chrome-arg --disable-web-security)
+      -s NAME launch ...                The browser and its first tab belong to that session
     incognito [url]                     Create isolated browser context (no relaunch)
     close-all                           Close named Chromex sessions
     delete-data <session>               Delete Chromex-managed session data
@@ -210,7 +211,7 @@ Usage: chromex [--raw] [--json] [-s name] <command> [args]
 OUTPUT FLAGS
   --raw       Print only primary command output and suppress hints/auto-snapshot
   --json      Print stable JSON envelope: ok, command, target, text, data, artifacts, error
-  -s NAME     Use a named Chromex session. Can also use CHROMEX_SESSION
+  -s NAME     Use a named Chromex session, which stays in its own browser. Can also use CHROMEX_SESSION
   --no-snap   Skip auto-snapshot after interactive commands
   --no-hints  Suppress contextual help[] suggestions
 
@@ -245,6 +246,10 @@ async function main() {
   if (parsed.options.cdpUrl) config.cdpUrl = parsed.options.cdpUrl;
   if (parsed.options.cdpEndpoint) config.cdpEndpoint = parsed.options.cdpEndpoint;
   if (parsed.options.cdpHeadersFile) config.cdpHeadersFile = parsed.options.cdpHeadersFile;
+  if (sessionName) {
+    const sessionEndpoint = await pinnedSessionEndpoint(getSession(config, sessionName), config);
+    if (sessionEndpoint) config.cdpUrl = sessionEndpoint;
+  }
 
   // Daemon mode (internal)
   if (cmd === '_daemon') {
@@ -257,14 +262,7 @@ async function main() {
   // List
   if (cmd === 'list' || cmd === 'ls') {
     const includeSensitive = args.includes('--include-sensitive');
-    let pages = await pagesFromMatchingDaemon(config);
-    if (!pages) pages = await getPagesHttp(config);
-    if (!pages) {
-      const cdp = new CDP(config.commandTimeout);
-      await cdp.connect(await resolveWsUrl(config));
-      pages = await getPages(cdp);
-      cdp.close();
-    }
+    const pages = await currentPages(config);
     const outputPages = redactPages(pages, { includeSensitive });
     writePagesCache(config._pagesCachePath, pages);
     audit('list', null, [], { ok: true }, config);
@@ -280,7 +278,7 @@ async function main() {
 
   if (cmd === 'sessions') {
     const records = listSessions(config);
-    const pages = await getLivePages().catch(() => []);
+    const pages = [...await getLivePages().catch(() => []), ...await sessionBrowserPages(records, config)];
     printEnvelope({
       ok: true,
       command: cmd,
@@ -320,6 +318,8 @@ async function main() {
   if (cmd === 'delete-data') {
     const name = args[0] || sessionName;
     if (!name) throw new Error('Session name required.');
+    const sessionEndpoint = await pinnedSessionEndpoint(getSession(config, name), config);
+    if (sessionEndpoint) config.cdpUrl = sessionEndpoint;
     const record = removeSession(config, name);
     const dataPath = deleteSessionData(name);
     if (record) await closeSessionRecords([record], { persist: false }).catch(() => {});
@@ -337,7 +337,8 @@ async function main() {
     if (options['extension-tools']) { options.extensionTools = true; delete options['extension-tools']; }
     if (options.webmcp) { options.webMcp = true; delete options.webmcp; }
     const result = await launchBrowser(options);
-    printEnvelope({ ok: true, command: cmd, text: result }, parsed.options);
+    const sessionNote = sessionName && result.endpoint ? `\n${await claimLaunchedBrowser(sessionName, result, options.url)}` : '';
+    printEnvelope({ ok: true, command: cmd, text: `${result.text}${sessionNote}` }, parsed.options);
     return;
   }
 
@@ -350,14 +351,16 @@ async function main() {
 
   // Incognito (no target -- creates a new context)
   if (cmd === 'incognito') {
+    const endpoint = await resolveWsUrl(config);
     const cdp = new CDP(config.commandTimeout);
-    await cdp.connect(await resolveWsUrl(config));
+    await cdp.connect(endpoint);
     const result = await incognitoContext(cdp, args[0]);
     if (sessionName) {
       setSession(config, sessionName, {
         targetId: result.targetId,
         browserContextId: result.browserContextId,
         url: args[0] || 'about:blank',
+        ...sessionBrowser(getSession(config, sessionName), endpoint),
       });
     }
     printEnvelope({ ok: true, command: cmd, target: result.targetId, text: result.message, data: result }, parsed.options);
@@ -367,8 +370,9 @@ async function main() {
 
   // Tab management (no daemon needed -- direct browser WebSocket)
   if (cmd === 'open' || cmd === 'close' || cmd === 'focus') {
+    const endpoint = await resolveWsUrl(config);
     const cdp = new CDP(config.commandTimeout);
-    await cdp.connect(await resolveWsUrl(config));
+    await cdp.connect(endpoint);
     let result;
     if (cmd === 'open') {
       if (!args[0]) { console.error('Error: URL required'); process.exit(1); }
@@ -377,7 +381,7 @@ async function main() {
         const statePath = previousSession?.statePath || sessionStatePath(sessionName);
         const { browserContextId } = await cdp.send('Target.createBrowserContext', { disposeOnDetach: false });
         const { targetId } = await cdp.send('Target.createTarget', { url: args[0], browserContextId });
-        setSession(config, sessionName, { targetId, browserContextId, url: args[0], statePath });
+        setSession(config, sessionName, { targetId, browserContextId, url: args[0], statePath, ...sessionBrowser(previousSession, endpoint) });
         const pages = await getPages(cdp);
         writePagesCache(config._pagesCachePath, pages);
         result = `Session "${sessionName}" opened (targetId: ${targetId.slice(0, 8)}). URL: ${args[0]}`;
@@ -433,12 +437,9 @@ async function main() {
   if (daemonMatches.length > 0) {
     targetId = resolvePrefix(targetPrefix, daemonTargetIds, 'daemon');
   } else {
-    if (!existsSync(config._pagesCachePath)) {
-      console.error('No page list cached. Run "chromex list" first.');
-      process.exit(1);
-    }
-    const pages = JSON.parse(readFileSync(config._pagesCachePath, 'utf8'));
-    targetId = resolvePrefix(targetPrefix, pages.map(p => p.targetId), 'target', 'Run "chromex list".');
+    const pages = await pagesWithTarget(targetPrefix);
+    const hint = sessionName ? `Run "chromex -s ${sessionName} open <url>" to reopen the session.` : 'Run "chromex list".';
+    targetId = resolvePrefix(targetPrefix, pages.map(p => p.targetId), 'target', hint);
   }
 
   // Check tab domain
@@ -626,6 +627,60 @@ function printEnvelope(envelope, options = {}) {
     return;
   }
   console.error('Error:', normalized.error || normalized.text || 'unknown error');
+}
+
+async function currentPages(activeConfig) {
+  const daemonPages = await pagesFromMatchingDaemon(activeConfig);
+  if (daemonPages) return daemonPages;
+  const httpPages = await getPagesHttp(activeConfig);
+  if (httpPages) return httpPages;
+  const cdp = new CDP(activeConfig.commandTimeout);
+  await cdp.connect(await resolveWsUrl(activeConfig));
+  try {
+    return await getPages(cdp);
+  } finally {
+    cdp.close();
+  }
+}
+
+/**
+ * Cached pages when they already hold the target; otherwise pages read again from the current browser,
+ * because another client may have rewritten the shared cache with a different browser.
+ */
+async function pagesWithTarget(prefix) {
+  const cached = existsSync(config._pagesCachePath) ? JSON.parse(readFileSync(config._pagesCachePath, 'utf8')) : [];
+  if (cached.some(page => page.targetId?.toUpperCase().startsWith(prefix.toUpperCase()))) return cached;
+  const pages = await currentPages(config).catch(() => null);
+  if (!pages) return cached;
+  writePagesCache(config._pagesCachePath, pages);
+  return pages;
+}
+
+/**
+ * Browser fields for a session record. A session keeps owning its browser only while it stays in
+ * the browser it launched, so a session that moved never hides a shared browser from other clients.
+ */
+function sessionBrowser(previous, endpoint) {
+  return { endpoint, ownsBrowser: !!previous?.ownsBrowser && previous.endpoint === endpoint };
+}
+
+async function claimLaunchedBrowser(name, launched, url) {
+  const previous = getSession(config, name);
+  const cdp = new CDP(config.commandTimeout);
+  await cdp.connect(launched.endpoint);
+  const pages = await getPages(cdp).finally(() => cdp.close());
+  const page = pages.find(item => url && (item.url === url || item.url === `${url}/`)) || pages.at(-1) || null;
+  const ownsBrowser = !launched.reused || (!!previous?.ownsBrowser && previous.endpoint === launched.endpoint);
+  setSession(config, name, {
+    endpoint: launched.endpoint,
+    ownsBrowser,
+    targetId: page?.targetId ?? null,
+    browserContextId: null,
+    url: page?.url || url || 'about:blank',
+  });
+  return page
+    ? `Session "${name}" uses this browser (targetId: ${page.targetId.slice(0, 8)}).`
+    : `Session "${name}" uses this browser. Run "chromex -s ${name} open <url>" to give it a tab.`;
 }
 
 async function getLivePages() {

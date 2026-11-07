@@ -17,10 +17,11 @@
 
 import { describe, it, expect } from 'vitest';
 import { spawn, spawnSync } from 'child_process';
-import { existsSync, mkdtempSync, rmSync } from 'fs';
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'fs';
 import { join, resolve } from 'path';
 import { fileURLToPath } from 'url';
 import { generateHints, isRefMapFresh } from '../plugins/chromex/skills/chromex/scripts/lib/hints.mjs';
+import { CDP } from '../plugins/chromex/skills/chromex/scripts/lib/client.mjs';
 
 const TEST_DIR = resolve(fileURLToPath(import.meta.url), '..');
 const SCRIPTS_DIR = resolve(TEST_DIR, '../plugins/chromex/skills/chromex/scripts');
@@ -369,6 +370,49 @@ describe('Daemon process lifecycle', () => {
       await new Promise(resolveWait => setTimeout(resolveWait, 25));
     }
   }
+
+  function startFakeBrowser(dir, profile) {
+    const profileDir = join(dir, 'home', '.chromex', 'profiles', profile);
+    mkdirSync(profileDir, { recursive: true });
+    const socketPath = join(dir, `${profile}.sock`);
+    const markerPath = join(profileDir, 'ChromexPipeActive.json');
+    const broker = spawn(process.execPath, [BROKER_PATH], { stdio: ['pipe', 'ignore', 'pipe'] });
+    broker.stdin.end(JSON.stringify({ browserPath: process.execPath, flags: [FAKE_BROWSER_PATH], socketPath, markerPath }));
+    return { broker, endpoint: `unix://${socketPath}`, ready: waitUntil(() => existsSync(markerPath)) };
+  }
+
+  it('keeps a named session in its own browser after another browser starts and rewrites the page cache', async () => {
+    const dir = mkdtempSync('/tmp/chromex-session-route-');
+    const env = { ...process.env, HOME: join(dir, 'home'), XDG_RUNTIME_DIR: join(dir, 'run') };
+    for (const name of ['CHROMEX_CDP_URL', 'CHROMEX_CDP_ENDPOINT', 'CDP_PORT_FILE', 'CHROMEX_SESSION']) delete env[name];
+    const own = startFakeBrowser(dir, 'own');
+    await own.ready;
+    const newer = startFakeBrowser(dir, 'newer');
+    await newer.ready;
+
+    try {
+      const seed = new CDP(2000);
+      await seed.connect(own.endpoint);
+      await seed.send('Target.attachToTarget', { targetId: 'target-own', flatten: true });
+      seed.close();
+      writeFileSync(join(dir, 'home', '.chromex', 'sessions.json'), JSON.stringify({
+        version: 1,
+        sessions: { checkout: { name: 'checkout', targetId: 'target-own', endpoint: own.endpoint } },
+      }));
+      mkdirSync(join(dir, 'run', 'chromex'), { recursive: true });
+      writeFileSync(join(dir, 'run', 'chromex', 'pages.json'), JSON.stringify([{ targetId: 'target-newer', type: 'page', url: 'https://newer.test' }]));
+
+      const run = spawnSync(process.execPath, [CLI_PATH, '-s', 'checkout', 'eval', '6*7'], { env, encoding: 'utf8' });
+
+      expect(run.stderr).toBe('');
+      expect(run.stdout.trim()).toBe('6*7');
+      spawnSync(process.execPath, [CLI_PATH, 'stop', 'target-own'], { env, encoding: 'utf8' });
+    } finally {
+      own.broker.kill();
+      newer.broker.kill();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }, 20000);
 
   it('exits when the CLI stops it', async () => {
     const dir = mkdtempSync('/tmp/chromex-daemon-stop-');

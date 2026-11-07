@@ -2,7 +2,9 @@
 // No real browser -- tests pure logic and error handling
 
 import { describe, it, expect } from 'vitest';
-import { existsSync, mkdtempSync, readFileSync, rmSync, unlinkSync, writeFileSync } from 'fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, unlinkSync, utimesSync, writeFileSync } from 'fs';
+import { spawn } from 'child_process';
+import net from 'net';
 import { homedir, tmpdir } from 'os';
 import { join, resolve } from 'path';
 import { parseKeyCombo, pressKeyStr } from '../plugins/chromex/skills/chromex/scripts/lib/commands/keyboard.mjs';
@@ -24,6 +26,7 @@ import { showStr } from '../plugins/chromex/skills/chromex/scripts/lib/commands/
 import { evidenceStr, recordEvidenceAction, recordEvidenceDialog } from '../plugins/chromex/skills/chromex/scripts/lib/commands/evidence.mjs';
 import { createDialogState, dialogClosed, dialogNotes, dialogOpened, dialogStr, DialogOpenedError, ensureNoOpenDialog, pausedByDialog, trackDialogs } from '../plugins/chromex/skills/chromex/scripts/lib/commands/dialog.mjs';
 import { sessionStatePath } from '../plugins/chromex/skills/chromex/scripts/lib/sessions.mjs';
+import { pinnedSessionEndpoint } from '../plugins/chromex/skills/chromex/scripts/lib/browser.mjs';
 import { resolveChromexPath, workspaceArtifactRoot } from '../plugins/chromex/skills/chromex/scripts/lib/artifacts.mjs';
 import { formatIssues, issuesStr } from '../plugins/chromex/skills/chromex/scripts/lib/commands/issues.mjs';
 import { inspectStr } from '../plugins/chromex/skills/chromex/scripts/lib/commands/inspect.mjs';
@@ -971,6 +974,80 @@ describe('Named session persistence', () => {
     const path = sessionStatePath('auth');
 
     expect(path).toContain('/.chromex/session-data/auth/storage-state.json');
+  });
+
+  async function listeningPort() {
+    const server = net.createServer(socket => socket.destroy());
+    await new Promise(resolveListen => server.listen(0, '127.0.0.1', resolveListen));
+    return { server, port: server.address().port };
+  }
+
+  function writePortFile(home, profile, port, mtimeSeconds) {
+    const dir = join(home, '.chromex', 'profiles', profile);
+    mkdirSync(dir, { recursive: true });
+    const file = join(dir, 'DevToolsActivePort');
+    writeFileSync(file, `${port}\n/devtools/browser/${profile}`);
+    utimesSync(file, mtimeSeconds, mtimeSeconds);
+    return `ws://127.0.0.1:${port}/devtools/browser/${profile}`;
+  }
+
+  function writeSessions(home, sessions) {
+    writeFileSync(join(home, '.chromex', 'sessions.json'), JSON.stringify({ version: 1, sessions }));
+  }
+
+  async function defaultEndpoint(home) {
+    const scripts = resolve('plugins/chromex/skills/chromex/scripts/lib');
+    const script = `import { loadConfig } from '${scripts}/config.mjs';
+      import { resolveWsUrl } from '${scripts}/browser.mjs';
+      console.log(await resolveWsUrl(loadConfig()));`;
+    const env = { ...process.env, HOME: home };
+    for (const name of ['CHROMEX_CDP_URL', 'CHROMEX_CDP_ENDPOINT', 'CDP_PORT_FILE', 'XDG_RUNTIME_DIR']) delete env[name];
+    const child = spawn(process.execPath, ['--input-type=module', '-e', script], { env });
+    let output = '';
+    child.stdout.on('data', chunk => { output += chunk; });
+    child.stderr.on('data', chunk => { output += chunk; });
+    await new Promise(resolveExit => child.once('exit', resolveExit));
+    return output.trim();
+  }
+
+  it('keeps a session on its own browser while it answers, unless an endpoint is given', async () => {
+    const { server, port } = await listeningPort();
+    const record = { name: 'qa', endpoint: `ws://127.0.0.1:${port}/devtools/browser/qa` };
+
+    try {
+      expect(await pinnedSessionEndpoint(record, {})).toBe(record.endpoint);
+      expect(await pinnedSessionEndpoint(record, { cdpUrl: 'ws://127.0.0.1:9/devtools/browser/explicit' })).toBeNull();
+      expect(await pinnedSessionEndpoint({ name: 'old' }, {})).toBeNull();
+    } finally {
+      await new Promise(resolveClose => server.close(resolveClose));
+    }
+    expect(await pinnedSessionEndpoint(record, {})).toBeNull();
+  });
+
+  it('never lets a browser launched for a session become the default while another browser answers', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'chromex-default-browser-'));
+    const shared = await listeningPort();
+    const owned = await listeningPort();
+
+    try {
+      const sharedEndpoint = writePortFile(home, 'shared', shared.port, 1_800_000_000);
+      const ownedEndpoint = writePortFile(home, 'qa', owned.port, 1_900_000_000);
+      expect(await defaultEndpoint(home)).toBe(ownedEndpoint);
+
+      writeSessions(home, { qa: { name: 'qa', endpoint: ownedEndpoint, ownsBrowser: true } });
+      expect(await defaultEndpoint(home)).toBe(sharedEndpoint);
+
+      writeSessions(home, { checkout: { name: 'checkout', endpoint: ownedEndpoint, ownsBrowser: false } });
+      expect(await defaultEndpoint(home)).toBe(ownedEndpoint);
+
+      writeSessions(home, { qa: { name: 'qa', endpoint: ownedEndpoint, ownsBrowser: true } });
+      await new Promise(resolveClose => shared.server.close(resolveClose));
+      expect(await defaultEndpoint(home)).toBe(ownedEndpoint);
+    } finally {
+      if (shared.server.listening) await new Promise(resolveClose => shared.server.close(resolveClose));
+      await new Promise(resolveClose => owned.server.close(resolveClose));
+      rmSync(home, { recursive: true, force: true });
+    }
   });
 });
 

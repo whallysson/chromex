@@ -53,6 +53,7 @@ chromex.mjs launch  --insecure                      # ignore certificate errors
 chromex.mjs launch  --chrome-arg FLAG               # pass custom Chrome flag
 chromex.mjs launch  --browser-path PATH             # explicit Chromium executable
 chromex.mjs launch  --pipe                          # modal-free shared debugging pipe
+chromex.mjs -s NAME launch --headless --url URL    # browser owned by a named session
 chromex.mjs launch  --extension-tools               # pipe mode with extension lifecycle APIs
 chromex.mjs launch  --webmcp                        # enable WebMCP in a visible supported Chrome
 chromex.mjs doctor                                  # diagnose CDP connectivity
@@ -351,4 +352,5 @@ This tells you there is content below/above that requires `scroll` to reveal. On
 - Use `intercept mock` to test with fake API responses
 - When a command opens a dialog it returns at once with the dialog text: answer with `dialog accept` or `dialog dismiss` instead of repeating the command
 - `dialog auto` accepts dialogs as they open; read `dialog log` afterwards to check what they said
+- When other agents may use Chromex on the same machine, run your own browser as a named session (`chromex -s <name> launch --headless --profile <name> --url <url>`, then `chromex -s <name> <command>` without a target): the session stays in its browser and does not become the default browser for anyone else
 - Audit log at `~/.chromex/audit.log` records all commands

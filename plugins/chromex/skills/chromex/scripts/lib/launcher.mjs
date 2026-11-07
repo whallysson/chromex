@@ -7,7 +7,7 @@ import { createHash } from 'crypto';
 import net from 'net';
 import { fileURLToPath } from 'url';
 import { sleep } from './utils.mjs';
-import { getWsUrlFromPortFile } from './browser.mjs';
+import { getWsUrlFromPortFile, isEndpointAlive } from './browser.mjs';
 import { CDP } from './client.mjs';
 
 const BROWSER_PATHS = {
@@ -114,32 +114,40 @@ export async function launchBrowser(options = {}) {
 
   if (usePipe) return launchPipeBrowser(browserPath, flags, userDataDir, options, explicitBrowserPath);
 
+  const portFile = resolve(userDataDir, 'DevToolsActivePort');
+  const runningEndpoint = await liveEndpointFromPortFile(portFile);
   const child = spawn(browserPath, flags, {
     detached: true,
     stdio: 'ignore',
   });
   child.unref();
 
-  // Wait for DevToolsActivePort to appear
   const maxWait = 10000;
   const start = Date.now();
-  const portFile = resolve(userDataDir, 'DevToolsActivePort');
   while (Date.now() - start < maxWait) {
-    try {
-      const wsUrl = existsSync(portFile) ? getWsUrlFromPortFile(portFile) : null;
-      if (wsUrl) {
-        const lines = [`Browser launched (PID: ${child.pid})`];
-        if (explicitBrowserPath) lines.push(`Browser path: ${browserPath}`);
-        if (options.incognito) lines.push('Mode: incognito');
-        lines.push(`Profile: ${options.profile || 'default'} (isolated)`);
-        lines.push(`Remote debugging active`);
-        return lines.join('\n');
-      }
-    } catch { /* waiting */ }
+    const endpoint = await liveEndpointFromPortFile(portFile);
+    if (endpoint) {
+      const reused = endpoint === runningEndpoint;
+      const lines = [reused ? `Browser already running for profile ${options.profile || 'default'}` : `Browser launched (PID: ${child.pid})`];
+      if (explicitBrowserPath) lines.push(`Browser path: ${browserPath}`);
+      if (options.incognito) lines.push('Mode: incognito');
+      lines.push(`Profile: ${options.profile || 'default'} (isolated)`);
+      lines.push(`Remote debugging active`);
+      return { text: lines.join('\n'), endpoint, reused };
+    }
     await sleep(500);
   }
 
-  return `Browser launched (PID: ${child.pid}) but DevToolsActivePort not found yet. Wait a moment and try "chromex list".`;
+  return { text: `Browser launched (PID: ${child.pid}) but DevToolsActivePort not found yet. Wait a moment and try "chromex list".`, endpoint: null, reused: false };
+}
+
+async function liveEndpointFromPortFile(portFile) {
+  try {
+    const endpoint = existsSync(portFile) ? getWsUrlFromPortFile(portFile) : null;
+    return endpoint && await isEndpointAlive(endpoint) ? endpoint : null;
+  } catch {
+    return null;
+  }
 }
 
 async function launchPipeBrowser(browserPath, flags, userDataDir, options, explicitBrowserPath) {
@@ -157,7 +165,7 @@ async function launchPipeBrowser(browserPath, flags, userDataDir, options, expli
       throw new Error(`Browser pipe for profile ${options.profile || 'pipe'} is already active without WebMCP. Use another profile or stop that browser before relaunching with --webmcp.`);
     }
     if (options.url) await openPipePage(marker.socketPath, options.url);
-    return pipeLaunchText(marker, options, explicitBrowserPath, browserPath, true);
+    return pipeLaunchResult(marker, options, explicitBrowserPath, browserPath, true);
   }
   const brokerPath = fileURLToPath(new URL('./browser-pipe-broker.mjs', import.meta.url));
   const broker = spawn(process.execPath, [brokerPath], {
@@ -177,14 +185,14 @@ async function launchPipeBrowser(browserPath, flags, userDataDir, options, expli
     if (brokerFailure) throw brokerFailure;
     if (await activePipeMarker(markerPath)) {
       const marker = JSON.parse(readFileSync(markerPath, 'utf8'));
-      return pipeLaunchText(marker, options, explicitBrowserPath, browserPath, false);
+      return pipeLaunchResult(marker, options, explicitBrowserPath, browserPath, false);
     }
     await sleep(250);
   }
   throw new Error('Browser pipe failed to start within 15 seconds.');
 }
 
-function pipeLaunchText(marker, options, explicitBrowserPath, browserPath, reused) {
+function pipeLaunchResult(marker, options, explicitBrowserPath, browserPath, reused) {
   const lines = [reused ? `Browser pipe already active (PID: ${marker.browserPid})` : `Browser launched through pipe (PID: ${marker.browserPid})`];
   if (explicitBrowserPath) lines.push(`Browser path: ${browserPath}`);
   if (options.incognito) lines.push('Mode: incognito');
@@ -192,7 +200,7 @@ function pipeLaunchText(marker, options, explicitBrowserPath, browserPath, reuse
   lines.push('Transport: remote debugging pipe');
   if (marker.extensionTools) lines.push('Extension tools: enabled');
   if (marker.webMcp) lines.push('WebMCP: enabled');
-  return lines.join('\n');
+  return { text: lines.join('\n'), endpoint: `unix://${marker.socketPath}`, reused };
 }
 
 async function activePipeMarker(markerPath) {

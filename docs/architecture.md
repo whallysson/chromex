@@ -91,6 +91,11 @@ Checks ~30 candidate paths across:
 - Profile root + `Default/` subfolder
 - `CDP_PORT_FILE` env var override
 
+Order of precedence:
+1. An explicit endpoint: `--cdp-url`, `--cdp-endpoint`, `CHROMEX_CDP_URL`, `CHROMEX_CDP_ENDPOINT`, or the config file.
+2. For `-s <name>`, the browser recorded in that session, while it answers.
+3. The most recently started live browser, skipping browsers launched for a named session (`chromex -s <name> launch`) unless no other browser answers.
+
 ### Configuration (`config.mjs`)
 
 Loads `~/.chromex/config.json` with fallback to `~/.config/cdp-skill/config.json` (legacy migration).

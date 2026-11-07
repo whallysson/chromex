@@ -588,6 +588,18 @@ chromex delete-data auth
 
 Named sessions keep a private storage-state file under `~/.chromex/session-data/<name>/storage-state.json`. Chromex restores it when the named session is reopened and refreshes it after state-changing session commands.
 
+Each named session remembers the browser it lives in. While that browser answers, `-s <name>` commands go to it even after another browser is launched, and a session tab missing from the shared page list is looked up in the session's own browser. An explicit `--cdp-url` or `CHROMEX_CDP_URL` still wins.
+
+To give an agent its own browser without disturbing other sessions, launch it for a named session:
+
+```bash
+chromex -s qa launch --headless --profile qa --url https://app.example.test/login
+chromex -s qa snap --refs
+chromex -s qa close
+```
+
+`launch` with `-s` makes the first tab the session tab. A browser launched for a session is never chosen as the default browser for other clients while another browser answers. Commands without `-s` keep using the most recently launched browser, so prefer named sessions when several agents share one machine.
+
 `chromex show --annotate` generates a local dashboard with screenshot previews, region/point marking, per-mark notes, and JSON export. Browsers with File System Access support can save the exported pack directly; other browsers download the JSON file.
 
 ### Storage State and Locators
