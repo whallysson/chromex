@@ -37,12 +37,13 @@ chromex snap <target> --refs
 - Create named sessions with isolated browser contexts, reusable targets, and local session dashboards.
 - Read page state through compact accessibility snapshots, filtered snapshots, DOM snapshots, HTML, screenshots, and highlighted elements.
 - Act on UI through refs, CSS selectors, coordinates, keyboard input, forms, uploads, drag and drop, touch gestures, dialogs, and load-more loops.
+- Record every JavaScript dialog with its text and outcome. A command that opens a dialog returns at once with that text instead of hanging until the timeout.
 - Debug production behavior with console history, network request details, response bodies, HAR export, request blocking, API mocking, throttling, and offline mode.
 - Test browser conditions with device presets, viewport resizing, DPR, geolocation, timezone, locale, CPU throttling, incognito contexts, proxies, and custom Chrome flags.
 - Diagnose performance and quality with Core Web Vitals, transfer size, DOM/memory counters, Lighthouse audits, JS/CSS coverage, Chrome traces, and heap snapshots.
 - Inspect Browser Issues, computed and matched CSS, event listeners, box models, prioritized runtime diagnoses, CPU profiles, heap retaining paths, duplicate strings, and trace insights.
 - Capture bounded screencasts with a local replay, manage extensions in trusted pipe mode, and discover or execute WebMCP and page-exposed developer tools.
-- Build evidence packs with screenshots, snapshots, HTML, console, network timeline, action timeline, and replay HTML.
+- Build evidence packs with screenshots, snapshots, HTML, console, network, dialogs, action timeline, and replay HTML.
 - Validate modern browser flows such as passkey/WebAuthn registration and login, downloads, cookies, portable storage state, PDF export, and isolated profiles.
 - Inspect Application panel state from the terminal: origin quota, storage usage breakdown, Cache Storage entries/bodies, IndexedDB schemas/rows, and Service Worker registrations.
 - Turn `@eN` refs into locators and optional `chromex-test` action code.
@@ -426,6 +427,8 @@ chromex locator <target> @e12 --format=chromex-test
 chromex click <target> @e12 --code=chromex-test
 chromex drag <target> "#source" "#dest"
 chromex dialog <target> accept
+chromex dialog <target> auto
+chromex dialog <target> log
 ```
 
 ### Forms

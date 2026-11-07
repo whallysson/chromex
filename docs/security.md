@@ -157,11 +157,11 @@ To disable:
 
 ## Sensitive Output Redaction
 
-Page URLs, request and response headers, textual bodies, console messages, extension storage, third-party developer tools, and WebMCP output redact secret-shaped values by default. The original values still reach the browser and application under test.
+Page URLs, request and response headers, textual bodies, console messages, JavaScript dialog text, extension storage, third-party developer tools, and WebMCP output redact secret-shaped values by default. Prompt answers in the dialog log are hidden entirely. The original values still reach the browser and application under test.
 
 Use `--include-sensitive` in the CLI or `includeSensitive: true` in MCP only for the live response that requires exact values. Network detail bodies default to 2,000 characters and can be expanded up to 1,000,000 with `--body-limit=N` or MCP `bodyLimit`.
 
-The reveal flag does not propagate into the audit log, page cache, stats, HAR, or structured evidence timeline, network, and console files. Visual and raw artifacts such as screenshots, screencasts, snapshots, HTML, traces, and heap snapshots can contain sensitive page data and remain the operator's responsibility.
+The reveal flag does not propagate into the audit log, page cache, stats, HAR, or structured evidence timeline, network, console, and dialog files. Visual and raw artifacts such as screenshots, screencasts, snapshots, HTML, traces, and heap snapshots can contain sensitive page data and remain the operator's responsibility.
 
 Pipe mode uses a Unix socket restricted to the current OS user. Per-tab daemon sockets additionally use the random token described above.
 

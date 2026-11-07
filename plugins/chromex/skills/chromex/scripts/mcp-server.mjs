@@ -388,11 +388,14 @@ const TOOLS = [
     }, ['target', 'gesture'], RW),
 
   tool('chromex_dialog',
-    'Handle JS dialogs (alert/confirm/prompt). Use "auto" to auto-accept all. Returns auto-snapshot with updated refs.',
+    'Answer and inspect JavaScript dialogs (alert, confirm, prompt, beforeunload). The tab daemon records every dialog with its text and outcome, across reloads, and a command that opens a dialog returns right away with that text. "accept"/"dismiss" answer the open dialog and return an auto-snapshot with updated refs; "auto" accepts dialogs as they open (enabled: false turns it off); "log" lists the recorded dialogs; "clear" empties the log.',
     {
       target: P_TARGET,
-      action: { type: 'string', enum: ['accept', 'dismiss', 'auto'], description: 'Dialog action' },
-      text: { type: 'string', description: 'Text for prompt (only with accept)' },
+      action: { type: 'string', enum: ['accept', 'dismiss', 'auto', 'log', 'clear'], description: 'Dialog action' },
+      text: { type: 'string', description: 'Answer typed into a prompt before accepting (accept only). Without it, a prompt is accepted with its default text.' },
+      enabled: { type: 'boolean', description: 'For auto: false stops accepting dialogs automatically (default: true)' },
+      limit: { type: 'number', minimum: 1, maximum: 200, description: 'For log: number of most recent dialogs to return (default: 50)' },
+      includeSensitive: { type: 'boolean', description: 'For log: reveal secret-shaped text and prompt answers only in this live response' },
       noSnap: P_NO_SNAP,
       noHints: P_NO_HINTS,
     }, ['target', 'action'], RW),
@@ -919,7 +922,16 @@ function toolToCmd(name, p) {
     case 'chromex_hover':      return { cmd: 'hover', args: [p.ref] };
     case 'chromex_drag':       return { cmd: 'drag', args: [p.from, p.to] };
     case 'chromex_touch':      return { cmd: 'touch', args: [p.gesture, ...(p.args || [])] };
-    case 'chromex_dialog':     return { cmd: 'dialog', args: p.text ? [p.action, p.text] : [p.action] };
+    case 'chromex_dialog': {
+      if (p.action === 'auto') return { cmd: 'dialog', args: ['auto', p.enabled === false ? 'off' : 'on'] };
+      if (p.action === 'log') {
+        const args = ['log'];
+        if (p.limit != null) args.push(`--limit=${p.limit}`);
+        if (p.includeSensitive) args.push('--include-sensitive');
+        return { cmd: 'dialog', args };
+      }
+      return { cmd: 'dialog', args: p.action === 'accept' && p.text != null ? [p.action, p.text] : [p.action] };
+    }
     case 'chromex_loadall':    return { cmd: 'loadall', args: p.interval != null ? [p.selector, String(p.interval)] : [p.selector] };
 
     // Forms

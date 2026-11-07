@@ -138,7 +138,12 @@ Usage: chromex [--raw] [--json] [-s name] <command> [args]
     type    <target> <text>             Type text at current focus
     drag    <target> <from> <to>        Drag & drop (selectors or x1,y1 x2,y2)
     touch   <target> <gesture> [args]   Touch: tap, swipe, pinch, longpress
-    dialog  <target> <action> [text]    Handle dialogs: accept, dismiss, auto
+    dialog  <target> <action> [args]    JavaScript dialogs, recorded from daemon start
+      accept [text]                     Press OK; text answers a prompt
+      dismiss                           Press Cancel
+      auto [on|off]                     Accept dialogs as they open
+      log [--limit=N]                   List recorded dialogs (--include-sensitive)
+      clear                             Empty the dialog log
 
   FORMS
     fill    <target> <selector> <value> Fill input/textarea

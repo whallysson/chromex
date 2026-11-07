@@ -239,23 +239,118 @@ chromex touch <target> longpress 200 300 2000   # 2 seconds
 
 ## Dialog Handling
 
-Handle JavaScript alert, confirm, and prompt dialogs.
+JavaScript `alert`, `confirm`, `prompt`, and `beforeunload` dialogs pause the page until someone answers them. Chrome draws them outside the page, so they never appear in screenshots, snapshots, or screencasts. Chromex records them instead and keeps the page from silently blocking your automation.
 
-```bash
-# Accept the current dialog
-chromex dialog <target> accept
+### What Happens When a Dialog Opens
 
-# Accept with text (for prompt dialogs)
-chromex dialog <target> accept "my answer"
+The tab daemon listens for dialogs from the moment it attaches to the tab. Every dialog lands in the dialog log with its text and outcome, including dialogs opened right before a reload or a navigation.
 
-# Dismiss the current dialog
-chromex dialog <target> dismiss
+When a command opens a dialog, the command returns at once with the dialog text instead of waiting for the CDP timeout:
 
-# Auto-accept ALL future dialogs (persistent for this tab)
-chromex dialog <target> auto
+```
+$ chromex click <target> "#delete"
+click opened a confirm dialog #1: "Delete invoice 761?". The page waits until it is answered. Answer it with "chromex dialog <t> accept" or "chromex dialog <t> dismiss".
 ```
 
-`auto` mode is especially useful for automation scripts where dialogs would otherwise block execution.
+The action itself ran: the click happened and the page asked for confirmation. Do not repeat the click. Answer the dialog instead.
+
+While a dialog is open, commands that need the page (`eval`, `snap`, `shot`, `click`, `nav`, and so on) fail right away with the same instructions, and nothing reaches the page. `dialog`, `stats`, `console list|detail`, `evidence status|replay`, `open`, `close`, `focus`, and `stop` keep working.
+
+Dialogs that open while a command runs are listed at the end of its result:
+
+```
+Clicked <BUTTON> "Save"
+
+dialogs[1]:
+  #3 alert "Saved invoice 761" accepted (auto)
+```
+
+### Commands
+
+```bash
+# Press OK on the open dialog (a prompt keeps its default text)
+chromex dialog <target> accept
+
+# Type an answer into a prompt, then press OK
+chromex dialog <target> accept "my answer"
+
+# Press Cancel
+chromex dialog <target> dismiss
+
+# Accept dialogs as they open, including one that is already open
+chromex dialog <target> auto
+chromex dialog <target> auto off
+
+# List recorded dialogs (last 50 by default, up to 200)
+chromex dialog <target> log
+chromex dialog <target> log --limit=10
+chromex dialog <target> log --include-sensitive
+
+# Empty the dialog log
+chromex dialog <target> clear
+```
+
+`accept` and `dismiss` append an incremental snapshot with refs, like other interactive commands. `auto`, `log`, and `clear` do not. `auto` is idempotent and lasts for the life of the tab daemon. In auto mode, prompts are accepted with their default text, as pressing OK would.
+
+Use `auto` when the flow only needs to get past dialogs, and read `dialog log` afterwards to check what they said. Leave auto mode off when the test must choose between OK and Cancel, or must type a prompt answer.
+
+### Dialog Log
+
+```
+$ chromex dialog <target> log
+dialogs[3] confirm:1 prompt:1 alert:1 auto:off
+[1] 18:56:39.731 CONFIRM dismissed (command) "Delete invoice 761?"
+[2] 18:56:40.470 PROMPT  accepted (command)  "Your name?" default "Ana" -> "<redacted>"
+[3] 18:56:54.840 ALERT   accepted (auto)     "Saved invoice 761"
+```
+
+Times are UTC, as in `console list`. The tab daemon keeps the last 200 dialogs for as long as it runs. Use `--json` to read each entry as data:
+
+| Field | Meaning |
+|-------|---------|
+| `id` | Sequence number within the tab daemon. It keeps growing after `clear`. |
+| `type` | `alert`, `confirm`, `prompt`, or `beforeunload`. |
+| `message` | Text shown by the dialog. |
+| `defaultPrompt` | Default text of a prompt, or `null` for other types. |
+| `url`, `frameId` | Frame that opened the dialog. |
+| `openedAt`, `closedAt` | ISO timestamps. |
+| `result` | `open`, `accepted`, `dismissed`, or `unknown` when Chrome no longer shows a dialog that never reported closing. |
+| `handledBy` | `command` for `dialog accept` or `dismiss`, `auto` for auto mode, or `browser` when it was answered in the browser window, for example by a person. |
+| `userInput` | Answer submitted to a prompt. |
+
+Messages, prompt defaults, and URLs hide secret-shaped values such as `token=...`, and prompt answers show as `<redacted>`. `--include-sensitive` reveals them only in that live response.
+
+### Evidence Packs
+
+While an evidence pack is active, each dialog is added to the timeline with its outcome, and `dialogs.json` is written next to `console.json` and `network.json`. Both stay redacted. The replay page lists the dialogs in its timeline and links `dialogs.json`.
+
+```bash
+chromex evidence <target> start checkout
+chromex dialog <target> auto
+chromex click <target> @e7
+chromex evidence <target> stop
+```
+
+### MCP
+
+The `chromex_dialog` tool exposes the same actions:
+
+| Arguments | CLI equivalent |
+|-----------|----------------|
+| `{ "action": "accept" }` | `dialog <target> accept` |
+| `{ "action": "accept", "text": "my answer" }` | `dialog <target> accept "my answer"` |
+| `{ "action": "dismiss" }` | `dialog <target> dismiss` |
+| `{ "action": "auto" }` | `dialog <target> auto` |
+| `{ "action": "auto", "enabled": false }` | `dialog <target> auto off` |
+| `{ "action": "log", "limit": 10, "includeSensitive": true }` | `dialog <target> log --limit=10 --include-sensitive` |
+| `{ "action": "clear" }` | `dialog <target> clear` |
+
+When a tool such as `chromex_click` opens a dialog, it returns the same text, and its `structuredContent.data` carries `paused: true` with the `dialog` entry. Tools during which dialogs opened include them in `data.dialogs`.
+
+### Limits
+
+- A dialog that was already open before Chromex attached to the tab cannot be answered through CDP. Answer it in the browser window, or close the tab with `chromex close <target>`.
+- Headless browsers have no window to click, so answer each dialog with `accept` or `dismiss`, or turn on `auto`.
 
 ## Hover
 

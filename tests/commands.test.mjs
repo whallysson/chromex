@@ -21,7 +21,8 @@ import { downloadStr } from '../plugins/chromex/skills/chromex/scripts/lib/comma
 import { buildLocator } from '../plugins/chromex/skills/chromex/scripts/lib/commands/locator.mjs';
 import { interceptStr } from '../plugins/chromex/skills/chromex/scripts/lib/commands/intercept.mjs';
 import { showStr } from '../plugins/chromex/skills/chromex/scripts/lib/commands/show.mjs';
-import { evidenceStr, recordEvidenceAction } from '../plugins/chromex/skills/chromex/scripts/lib/commands/evidence.mjs';
+import { evidenceStr, recordEvidenceAction, recordEvidenceDialog } from '../plugins/chromex/skills/chromex/scripts/lib/commands/evidence.mjs';
+import { createDialogState, dialogClosed, dialogNotes, dialogOpened, dialogStr, DialogOpenedError, ensureNoOpenDialog, pausedByDialog, trackDialogs } from '../plugins/chromex/skills/chromex/scripts/lib/commands/dialog.mjs';
 import { sessionStatePath } from '../plugins/chromex/skills/chromex/scripts/lib/sessions.mjs';
 import { resolveChromexPath, workspaceArtifactRoot } from '../plugins/chromex/skills/chromex/scripts/lib/artifacts.mjs';
 import { formatIssues, issuesStr } from '../plugins/chromex/skills/chromex/scripts/lib/commands/issues.mjs';
@@ -1005,6 +1006,280 @@ describe('Evidence pack command', () => {
       else process.env.CHROMEX_ARTIFACT_ROOT = previousArtifactRoot;
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+});
+
+describe('Dialog command', () => {
+  function dialogCdp({ failHandle = null } = {}) {
+    const sent = [];
+    const paused = [];
+    return {
+      sent,
+      paused,
+      async send(method, params, sid) {
+        sent.push({ method, params, sid });
+        if (method === 'Page.handleJavaScriptDialog' && failHandle) throw new Error(failHandle);
+        return {};
+      },
+      rejectSession(sid, error) {
+        paused.push({ sid, error });
+      },
+    };
+  }
+
+  const confirmParams = { type: 'confirm', message: 'Delete invoice 761?', url: 'https://app.example.test/invoices?token=dialog-secret', frameId: 'F1' };
+
+  it('tracks the dialogs of its own page session after enabling the Page domain', () => {
+    const handlers = new Map();
+    const sent = [];
+    const cdp = {
+      onEvent(method, handler) { handlers.set(method, handler); },
+      send(method, params, sid) { sent.push({ method, sid }); return Promise.resolve({}); },
+      rejectSession() {},
+    };
+    const state = createDialogState();
+    const changes = [];
+
+    trackDialogs(cdp, 'sid1', state, entry => changes.push(`${entry.id}:${entry.result}`));
+    handlers.get('Page.javascriptDialogOpening')({ type: 'alert', message: 'Other tab' }, { sessionId: 'sid2' });
+    handlers.get('Page.javascriptDialogOpening')({ type: 'alert', message: 'Saved invoice 761', frameId: 'F1' }, { sessionId: 'sid1' });
+    handlers.get('Page.javascriptDialogClosed')({ frameId: 'F1', result: true }, { sessionId: 'sid1' });
+
+    expect(sent).toEqual([{ method: 'Page.enable', sid: 'sid1' }]);
+    expect(state.items.map(entry => entry.message)).toEqual(['Saved invoice 761']);
+    expect(changes).toEqual(['1:open', '1:accepted']);
+  });
+
+  it('records each dialog with its text and outcome, closed in the browser', () => {
+    const state = createDialogState();
+    const cdp = dialogCdp();
+
+    const entry = dialogOpened(cdp, 'sid1', state, confirmParams, Date.parse('2026-11-07T10:00:00.000Z'));
+    dialogClosed(state, { frameId: 'F1', result: false }, Date.parse('2026-11-07T10:00:02.000Z'));
+
+    expect(entry).toMatchObject({
+      id: 1,
+      type: 'confirm',
+      message: 'Delete invoice 761?',
+      openedAt: '2026-11-07T10:00:00.000Z',
+      closedAt: '2026-11-07T10:00:02.000Z',
+      result: 'dismissed',
+      handledBy: 'browser',
+    });
+    expect(state.items).toEqual([entry]);
+  });
+
+  it('frees the running command when a dialog opens without auto mode', () => {
+    const state = createDialogState();
+    const cdp = dialogCdp();
+
+    const entry = dialogOpened(cdp, 'sid1', state, confirmParams);
+    const { error } = cdp.paused[0];
+    const paused = pausedByDialog('click', error);
+
+    expect(cdp.paused).toHaveLength(1);
+    expect(error).toBeInstanceOf(DialogOpenedError);
+    expect(error.entry).toBe(entry);
+    expect(cdp.sent).toEqual([]);
+    expect(paused.text).toContain('click opened a confirm dialog #1: "Delete invoice 761?"');
+    expect(paused.text).toContain('chromex dialog <t> accept');
+    expect(paused.text).toContain('chromex dialog <t> dismiss');
+    expect(paused.data).toMatchObject({ paused: true, dialog: { id: 1, type: 'confirm', result: 'open' } });
+  });
+
+  it('accepts dialogs as they open in auto mode, prompts with their default text', async () => {
+    const state = createDialogState();
+    const cdp = dialogCdp();
+    await dialogStr(cdp, 'sid1', state, 'auto', []);
+
+    const entry = dialogOpened(cdp, 'sid1', state, { type: 'prompt', message: 'Your name?', defaultPrompt: 'Ana', frameId: 'F1' });
+    dialogClosed(state, { frameId: 'F1', result: true, userInput: 'Ana' });
+
+    expect(cdp.paused).toEqual([]);
+    expect(cdp.sent).toEqual([{ method: 'Page.handleJavaScriptDialog', params: { accept: true, promptText: 'Ana' }, sid: 'sid1' }]);
+    expect(entry).toMatchObject({ result: 'accepted', handledBy: 'auto', userInput: 'Ana' });
+  });
+
+  it('keeps auto mode idempotent, accepts the open dialog when enabled and turns off', async () => {
+    const state = createDialogState();
+    const cdp = dialogCdp();
+    const entry = dialogOpened(cdp, 'sid1', state, confirmParams);
+
+    const enabled = await dialogStr(cdp, 'sid1', state, 'auto', []);
+    const again = await dialogStr(cdp, 'sid1', state, 'auto', ['on']);
+    const disabled = await dialogStr(cdp, 'sid1', state, 'auto', ['off']);
+
+    expect(enabled.text).toContain('Auto-dialog on');
+    expect(enabled.text).toContain('Accepted the open confirm #1');
+    expect(enabled.data).toMatchObject({ auto: true, accepted: { id: 1 } });
+    expect(again.data).toMatchObject({ auto: true, accepted: null });
+    expect(cdp.sent.filter(call => call.method === 'Page.handleJavaScriptDialog')).toHaveLength(1);
+    expect(entry.handledBy).toBe('auto');
+    expect(disabled.text).toContain('Auto-dialog off');
+    expect(state.auto).toBe(false);
+    await expect(dialogStr(cdp, 'sid1', state, 'auto', ['sometimes'])).rejects.toThrow('Usage: dialog <target>');
+  });
+
+  it('answers the open dialog without enabling the Page domain, which a dialog blocks', async () => {
+    const state = createDialogState();
+    const cdp = dialogCdp();
+    const prompt = dialogOpened(cdp, 'sid1', state, { type: 'prompt', message: 'Your name?', defaultPrompt: 'Ana', frameId: 'F1' });
+
+    const accepted = await dialogStr(cdp, 'sid1', state, 'accept', ['Bruno', 'Lima']);
+    dialogClosed(state, { frameId: 'F1', result: true, userInput: 'Bruno Lima' });
+    const confirm = dialogOpened(cdp, 'sid1', state, confirmParams);
+    const dismissed = await dialogStr(cdp, 'sid1', state, 'dismiss', []);
+
+    expect(cdp.sent.map(call => call.method)).toEqual(['Page.handleJavaScriptDialog', 'Page.handleJavaScriptDialog']);
+    expect(cdp.sent[0].params).toEqual({ accept: true, promptText: 'Bruno Lima' });
+    expect(cdp.sent[1].params).toEqual({ accept: false });
+    expect(accepted.text).toContain('Dialog accepted: prompt #1');
+    expect(dismissed.text).toContain('Dialog dismissed: confirm #2');
+    expect(prompt).toMatchObject({ result: 'accepted', handledBy: 'command', userInput: 'Bruno Lima' });
+    expect(confirm.handledBy).toBe('command');
+  });
+
+  it('accepts a prompt with its default text when no answer is given', async () => {
+    const state = createDialogState();
+    const cdp = dialogCdp();
+    dialogOpened(cdp, 'sid1', state, { type: 'prompt', message: 'Your name?', defaultPrompt: 'Ana' });
+
+    await dialogStr(cdp, 'sid1', state, 'accept', []);
+
+    expect(cdp.sent[0].params).toEqual({ accept: true, promptText: 'Ana' });
+  });
+
+  it('forgets dialogs that the browser no longer shows', async () => {
+    const state = createDialogState();
+    const cdp = dialogCdp({ failHandle: 'No dialog is showing' });
+    const stale = dialogOpened(cdp, 'sid1', state, confirmParams);
+
+    await expect(dialogStr(cdp, 'sid1', state, 'accept', [])).rejects.toThrow('No dialog is showing');
+
+    expect(stale).toMatchObject({ result: 'unknown', handledBy: null });
+    expect(() => ensureNoOpenDialog(state, 'click', ['#save'])).not.toThrow();
+  });
+
+  it('lists dialogs with secret-shaped text and prompt answers redacted by default', async () => {
+    const state = createDialogState();
+    const cdp = dialogCdp();
+    dialogOpened(cdp, 'sid1', state, { type: 'alert', message: 'Session expired, token=abc123secret', url: 'https://app.example.test/?token=url-secret', frameId: 'F1' });
+    dialogClosed(state, { frameId: 'F1', result: true });
+    dialogOpened(cdp, 'sid1', state, { type: 'prompt', message: 'Password?', defaultPrompt: '', frameId: 'F1' });
+    dialogClosed(state, { frameId: 'F1', result: true, userInput: 'hunter2' });
+
+    const safe = await dialogStr(cdp, 'sid1', state, 'log', []);
+    const revealed = await dialogStr(cdp, 'sid1', state, 'log', ['--include-sensitive']);
+    const latest = await dialogStr(cdp, 'sid1', state, 'log', ['--limit=1']);
+
+    expect(safe.text).toContain('dialogs[2] alert:1 prompt:1 auto:off');
+    expect(safe.text).toContain('ALERT');
+    expect(safe.text).toContain('accepted (browser)');
+    expect(safe.text).not.toContain('abc123secret');
+    expect(safe.text).not.toContain('hunter2');
+    expect(JSON.stringify(safe.data)).not.toContain('url-secret');
+    expect(safe.data.dialogs[1].userInput).toBe('<redacted>');
+    expect(safe.data.sensitiveIncluded).toBe(false);
+    expect(revealed.text).toContain('abc123secret');
+    expect(revealed.data.dialogs[1].userInput).toBe('hunter2');
+    expect(latest.data.dialogs).toHaveLength(1);
+    expect(latest.text).toContain('(showing last 1 of 2)');
+  });
+
+  it('points to the answer commands while a dialog is open', async () => {
+    const state = createDialogState();
+    const cdp = dialogCdp();
+    const empty = await dialogStr(cdp, 'sid1', state, 'log', []);
+    dialogOpened(cdp, 'sid1', state, confirmParams);
+
+    const log = await dialogStr(cdp, 'sid1', state, 'log', []);
+
+    expect(empty.text).toContain('dialogs: 0 dialogs captured since daemon started');
+    expect(log.text).toContain('open');
+    expect(log.text).toContain('chromex dialog <t> dismiss');
+    expect(log.data.open).toMatchObject({ id: 1, result: 'open' });
+  });
+
+  it('blocks page commands while a dialog is open but not dialog or memory commands', () => {
+    const state = createDialogState();
+    const cdp = dialogCdp();
+    const entry = dialogOpened(cdp, 'sid1', state, confirmParams);
+
+    expect(() => ensureNoOpenDialog(state, 'eval', ['1+1'])).toThrow('Dialog #1 (confirm) is open and pauses the page');
+    expect(() => ensureNoOpenDialog(state, 'shot', [])).toThrow('chromex dialog <t> auto');
+    for (const [cmd, args] of [['dialog', ['accept']], ['stats', []], ['console', ['list']], ['evidence', ['status']], ['close', ['ABC']]]) {
+      expect(() => ensureNoOpenDialog(state, cmd, args)).not.toThrow();
+    }
+    entry.handledBy = 'auto';
+    expect(() => ensureNoOpenDialog(state, 'eval', ['1+1'])).not.toThrow();
+  });
+
+  it('describes the dialogs that opened during a command', () => {
+    const state = createDialogState();
+    const cdp = dialogCdp();
+    dialogOpened(cdp, 'sid1', state, { type: 'alert', message: 'Earlier', frameId: 'F1' });
+    dialogClosed(state, { frameId: 'F1', result: true });
+    const firstId = state.nextId;
+    state.auto = true;
+    dialogOpened(cdp, 'sid1', state, { type: 'alert', message: 'Saved invoice 761', frameId: 'F1' });
+    dialogClosed(state, { frameId: 'F1', result: true });
+    state.auto = false;
+    dialogOpened(cdp, 'sid1', state, { type: 'confirm', message: 'Leave this page?', frameId: 'F1' });
+
+    const notes = dialogNotes(state, firstId);
+
+    expect(dialogNotes(state, state.nextId)).toBeNull();
+    expect(notes.text).toContain('dialogs[2]:');
+    expect(notes.text).toContain('#2 alert "Saved invoice 761" accepted (auto)');
+    expect(notes.text).toContain('#3 confirm "Leave this page?" open');
+    expect(notes.text).toContain('Dialog #3 is still open');
+    expect(notes.text).not.toContain('Earlier');
+    expect(notes.dialogs.map(dialog => dialog.id)).toEqual([2, 3]);
+  });
+
+  it('clears the log and caps it at 200 entries', async () => {
+    const state = createDialogState();
+    const cdp = dialogCdp();
+    for (let index = 0; index < 205; index++) {
+      dialogOpened(cdp, 'sid1', state, { type: 'alert', message: `Alert ${index}`, frameId: 'F1' });
+      dialogClosed(state, { frameId: 'F1', result: true });
+    }
+
+    expect(state.items).toHaveLength(200);
+    expect(state.items[0].message).toBe('Alert 5');
+    const cleared = await dialogStr(cdp, 'sid1', state, 'clear', []);
+    expect(cleared.text).toBe('Dialog log cleared (200 entries).');
+    expect(state.items).toEqual([]);
+    expect(state.nextId).toBe(206);
+    await expect(dialogStr(cdp, 'sid1', state, 'maybe', [])).rejects.toThrow('Usage: dialog <target> accept [text] | dismiss | auto [on|off] | log');
+  });
+
+  it('adds dialogs to the evidence timeline, dialogs.json and the replay', async () => {
+    await withArtifactRoot('chromex-dialog-evidence-', async () => {
+      const state = { active: null, last: null };
+      const cdp = evidenceCdp();
+      const dialogState = createDialogState();
+      const context = { networkRequests: new Map(), consoleMessages: [], dialogs: dialogState.items };
+
+      await evidenceStr(cdp, 'sid1', 'target1', state, 'start', 'dialog flow', context);
+      const entry = dialogOpened(dialogCdp(), 'sid1', dialogState, { type: 'alert', message: 'Saved, token=evidence-dialog-secret', frameId: 'F1' });
+      recordEvidenceDialog(state, entry);
+      dialogClosed(dialogState, { frameId: 'F1', result: true });
+      recordEvidenceDialog(state, entry);
+      const output = await evidenceStr(cdp, 'sid1', 'target1', state, 'stop', 'after save', context);
+      const timeline = JSON.parse(readFileSync(join(output.data.root, 'timeline.json'), 'utf8'));
+      const dialogs = JSON.parse(readFileSync(join(output.data.root, 'dialogs.json'), 'utf8'));
+      const replay = readFileSync(output.data.replay, 'utf8');
+
+      expect(timeline.filter(item => item.type === 'dialog')).toEqual([
+        expect.objectContaining({ dialogId: 1, dialogType: 'alert', result: 'accepted', handledBy: 'browser' }),
+      ]);
+      expect(dialogs).toEqual([expect.objectContaining({ id: 1, type: 'alert', result: 'accepted' })]);
+      expect(JSON.stringify([timeline, dialogs])).not.toContain('evidence-dialog-secret');
+      expect(replay).toContain('href="dialogs.json"');
+      expect(replay).toContain('alert: Saved');
+      expect(output.artifacts.some(item => item.type === 'evidence-dialogs')).toBe(true);
+    });
   });
 });
 

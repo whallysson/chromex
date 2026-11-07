@@ -83,6 +83,9 @@ describe('sensitive data redaction', () => {
   it('redacts values from form and input commands', () => {
     expect(redactCommandArgs('fill', ['#password', 'super-secret'])).toEqual(['#password', '<redacted>']);
     expect(redactCommandArgs('type', ['super-secret'])).toEqual(['<redacted>']);
+    expect(redactCommandArgs('dialog', ['accept', 'super-secret'])).toEqual(['accept', '<redacted>']);
+    expect(redactCommandArgs('dialog', ['log', '--limit=5'])).toEqual(['log', '--limit=5']);
+    expect(redactCommandArgs('dialog', ['auto', 'off'])).toEqual(['auto', 'off']);
     expect(redactCommandArgs('form', ['{"password":"super-secret"}'])).toEqual(['<redacted>']);
   });
 

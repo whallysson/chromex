@@ -75,6 +75,25 @@ describe('CDP lifecycle', () => {
     expect(vi.getTimerCount()).toBe(0);
   });
 
+  it('rejects only the pending commands of one session', async () => {
+    vi.useFakeTimers();
+    globalThis.WebSocket = FakeWebSocket;
+    const cdp = new CDP(15000);
+    await cdp.connect('ws://test');
+    const ws = FakeWebSocket.instances[0];
+    const paused = cdp.send('Runtime.evaluate', {}, 'page-session');
+    const other = cdp.send('Target.getTargets', {}, 'other-session');
+    const error = new Error('A confirm dialog opened');
+
+    cdp.rejectSession('page-session', error);
+    ws.respond({ targetInfos: [] });
+
+    await expect(paused).rejects.toBe(error);
+    await expect(other).resolves.toEqual({ targetInfos: [] });
+    expect(vi.getTimerCount()).toBe(0);
+    cdp.close();
+  });
+
   it('uses the local Unix broker transport for shared pipe sessions', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'chromex-client-'));
     const socketPath = join(dir, 'browser.sock');

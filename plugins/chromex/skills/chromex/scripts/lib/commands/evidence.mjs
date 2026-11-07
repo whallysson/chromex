@@ -4,6 +4,7 @@ import { dirname, relative } from 'path';
 import { resolveArtifactPath, timestamp } from '../artifacts.mjs';
 import { htmlStr } from './html.mjs';
 import { snapshotStr } from './snapshot.mjs';
+import { publicDialog } from './dialog.mjs';
 
 export async function evidenceStr(cdp, sid, targetId, state, action = 'status', label = '', context = {}) {
   const normalized = (action || 'status').toLowerCase();
@@ -17,6 +18,28 @@ export async function evidenceStr(cdp, sid, targetId, state, action = 'status', 
     return stopEvidence(cdp, sid, state, label || 'capture', context);
   }
   throw new Error('Usage: evidence start [name] | mark [label] | stop [label] | status | replay | capture [name]');
+}
+
+/**
+ * Adds a dialog to the active pack timeline when it opens and updates that same entry when it closes.
+ */
+export function recordEvidenceDialog(state, entry) {
+  if (!state.active) return;
+  const view = publicDialog(entry);
+  const item = {
+    type: 'dialog',
+    ts: view.openedAt,
+    dialogId: view.id,
+    dialogType: view.type,
+    label: `${view.type}: ${view.message.slice(0, 200)}`,
+    result: view.result,
+    handledBy: view.handledBy,
+    closedAt: view.closedAt,
+  };
+  const { timeline } = state.active;
+  const index = timeline.findIndex(existing => existing.type === 'dialog' && existing.dialogId === entry.id);
+  if (index === -1) timeline.push(item);
+  else timeline[index] = item;
 }
 
 export function recordEvidenceAction(state, command, args, ok, text) {
@@ -149,13 +172,16 @@ async function writeRuntimeFiles(pack, context) {
   const consolePath = `${pack.root}/console.json`;
   const networkPath = `${pack.root}/network.json`;
   const timelinePath = `${pack.root}/timeline.json`;
+  const dialogsPath = `${pack.root}/dialogs.json`;
   const networkEntries = context.networkRequests ? [...context.networkRequests.entries()] : [];
   writeFileSync(consolePath, JSON.stringify(redactObject(context.consoleMessages || []), null, 2), { mode: 0o600 });
   writeFileSync(networkPath, JSON.stringify(redactObject(networkEntries.map(([id, request]) => ({ id, ...request }))), null, 2), { mode: 0o600 });
   writeFileSync(timelinePath, JSON.stringify(pack.timeline, null, 2), { mode: 0o600 });
+  writeFileSync(dialogsPath, JSON.stringify((context.dialogs || []).map(entry => publicDialog(entry)), null, 2), { mode: 0o600 });
   upsertArtifact(pack, { type: 'evidence-console', path: consolePath });
   upsertArtifact(pack, { type: 'evidence-network', path: networkPath });
   upsertArtifact(pack, { type: 'evidence-timeline', path: timelinePath });
+  upsertArtifact(pack, { type: 'evidence-dialogs', path: dialogsPath });
 }
 
 async function writePack(pack, context) {
@@ -192,7 +218,7 @@ function renderReplay(pack) {
       <p><a href="${escapeHtml(snapshot)}">Snapshot</a> <a href="${escapeHtml(html)}">HTML</a></p>
     </article>`;
   }).join('\n');
-  const timeline = pack.timeline.map(item => `<li><strong>${escapeHtml(item.type)}</strong> ${escapeHtml(item.ts)} ${escapeHtml(item.command || item.label || item.name || '')}</li>`).join('\n');
+  const timeline = pack.timeline.map(item => `<li><strong>${escapeHtml(item.type)}</strong> ${escapeHtml(item.ts)} ${escapeHtml(timelineText(item))}</li>`).join('\n');
   return `<!doctype html>
 <html lang="en">
 <head>
@@ -223,11 +249,17 @@ function renderReplay(pack) {
       <p><a href="evidence.json">evidence.json</a></p>
       <p><a href="console.json">console.json</a></p>
       <p><a href="network.json">network.json</a></p>
+      <p><a href="dialogs.json">dialogs.json</a></p>
     </aside>
     <section>${rows || '<p>No marks captured.</p>'}</section>
   </main>
 </body>
 </html>`;
+}
+
+function timelineText(item) {
+  if (item.type !== 'dialog') return item.command || item.label || item.name || '';
+  return `${item.label} -> ${item.result}${item.handledBy ? ` (${item.handledBy})` : ''}`;
 }
 
 function resultForPack(pack, text, marks = []) {

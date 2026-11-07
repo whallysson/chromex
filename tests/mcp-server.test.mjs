@@ -468,6 +468,35 @@ describe('Tool Execution (no browser)', () => {
 
     expect(request).toMatchObject({ cmd: 'audit', args: expectedArguments });
   });
+
+  it.each([
+    ['accept with prompt text', { action: 'accept', text: 'Bruno' }, ['accept', 'Bruno']],
+    ['accept with an empty prompt answer', { action: 'accept', text: '' }, ['accept', '']],
+    ['dismiss', { action: 'dismiss', noSnap: true }, ['dismiss', '--no-snap']],
+    ['auto on by default', { action: 'auto' }, ['auto', 'on']],
+    ['auto turned off', { action: 'auto', enabled: false }, ['auto', 'off']],
+    ['log with limit and sensitive values', { action: 'log', limit: 5, includeSensitive: true }, ['log', '--limit=5', '--include-sensitive']],
+    ['clear', { action: 'clear' }, ['clear']],
+  ])('maps chromex_dialog %s to the daemon command', async (_label, toolArguments, expectedArguments) => {
+    const request = await captureDaemonRequest('chromex_dialog', toolArguments);
+
+    expect(request).toMatchObject({ cmd: 'dialog', args: expectedArguments });
+  });
+
+  it('describes every dialog action in the chromex_dialog schema', async () => {
+    const responses = await mcpSession([
+      INIT,
+      INITIALIZED,
+      { jsonrpc: '2.0', id: 1, method: 'tools/list' },
+    ]);
+    const dialog = findById(responses, 1).result.tools.find(item => item.name === 'chromex_dialog');
+
+    expect(dialog.inputSchema.properties.action.enum).toEqual(['accept', 'dismiss', 'auto', 'log', 'clear']);
+    expect(dialog.inputSchema.properties.enabled.type).toBe('boolean');
+    expect(dialog.inputSchema.properties.limit).toMatchObject({ type: 'number', minimum: 1, maximum: 200 });
+    expect(dialog.inputSchema.properties.includeSensitive.type).toBe('boolean');
+    expect(dialog.description).toMatch(/log/);
+  });
 });
 
 // ---- Auto-snapshot tool property tests ----

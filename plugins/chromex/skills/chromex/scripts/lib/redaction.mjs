@@ -8,7 +8,7 @@ export function redactCommandArgs(command, args = []) {
   if (FULLY_SENSITIVE_COMMANDS.has(command)) return values.length ? [REDACTED] : [];
   if (command === 'type') return values.length ? [REDACTED] : [];
   if (command === 'fill') return values.length ? [truncate(values[0]), REDACTED] : [];
-  if (command === 'dialog') return values.map((value, index) => index === 0 ? truncate(value) : REDACTED);
+  if (command === 'dialog' && values[0]?.toLowerCase() === 'accept') return values.map((value, index) => index === 0 ? truncate(value) : REDACTED);
   if (command === 'cookies' && values[0]?.toLowerCase() === 'set') return [truncate(values[0]), REDACTED];
   if (command === 'extensions' && values[0]?.toLowerCase() === 'storage-set') return values.map((value, index) => index === 3 ? REDACTED : truncate(value));
   if (command === 'third-party' && values[0]?.toLowerCase() === 'execute') return values.map((value, index) => index === 2 ? REDACTED : truncate(value));

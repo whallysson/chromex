@@ -27,7 +27,7 @@ import { perfStr } from './commands/perf.mjs';
 // Tier 1
 import { waitLifecycleStr } from './commands/wait.mjs';
 import { openTabStr, closeTabStr, focusTabStr } from './commands/tab.mjs';
-import { dialogStr, setupAutoDialog } from './commands/dialog.mjs';
+import { createDialogState, dialogNotes, dialogStr, DialogOpenedError, ensureNoOpenDialog, pausedByDialog, trackDialogs } from './commands/dialog.mjs';
 import { uploadStr } from './commands/upload.mjs';
 import { geoStr, timezoneStr, localeStr } from './commands/geo.mjs';
 import { throttleStr } from './commands/throttle.mjs';
@@ -52,7 +52,7 @@ import { SessionStats, statsStr } from './commands/stats.mjs';
 import { appStr, cacheStr, idbStr, serviceWorkersStr } from './commands/app.mjs';
 import { stateStr } from './commands/state.mjs';
 import { actionCodeStr, locatorStr } from './commands/locator.mjs';
-import { evidenceStr, recordEvidenceAction } from './commands/evidence.mjs';
+import { evidenceStr, recordEvidenceAction, recordEvidenceDialog } from './commands/evidence.mjs';
 import { issuesStr } from './commands/issues.mjs';
 import { inspectStr } from './commands/inspect.mjs';
 import { diagnoseStr } from './commands/diagnose.mjs';
@@ -154,6 +154,9 @@ export async function runDaemon(targetId, config) {
   const issuesState = { enabled: false, items: [] };
   const screencastState = { active: null, last: null };
   const webMcpState = createWebMcpState(cdp, sessionId);
+
+  const dialogState = createDialogState();
+  trackDialogs(cdp, sessionId, dialogState, entry => recordEvidenceDialog(evidenceState, entry));
 
   // Network request tracking (CDP Network domain) for detail drill-down
   const networkRequests = new Map();
@@ -270,6 +273,7 @@ export async function runDaemon(targetId, config) {
     resetIdle();
     const startMs = Date.now();
     const auditResult = { ok: true };
+    const firstDialogId = dialogState.nextId;
     try {
       // Strip --no-snap / --no-hints before dispatch so they don't contaminate
       // command args (e.g. fill would type "--no-snap" into the input field).
@@ -278,6 +282,7 @@ export async function runDaemon(targetId, config) {
       const codeArg = args.find(a => a.startsWith('--code='));
       const codeFormat = codeArg ? codeArg.slice('--code='.length) : null;
       if (noSnap || noHints || codeArg) args = args.filter(a => a !== '--no-snap' && a !== '--no-hints' && a !== codeArg);
+      ensureNoOpenDialog(dialogState, cmd, args);
 
       let result;
       let actionCode = null;
@@ -506,6 +511,7 @@ export async function runDaemon(targetId, config) {
           result = await evidenceStr(cdp, sessionId, targetId, evidenceState, args[0], args.slice(1).join(' '), {
             consoleMessages,
             networkRequests,
+            dialogs: dialogState.items,
           });
           break;
         }
@@ -549,15 +555,9 @@ export async function runDaemon(targetId, config) {
         case 'focus':
           result = await focusTabStr(cdp, args[0]);
           break;
-        case 'dialog': {
-          const dialogResult = await dialogStr(cdp, sessionId, args[0], args.slice(1).join(' ') || undefined);
-          if (dialogResult === '__AUTO_DIALOG__') {
-            result = setupAutoDialog(cdp, sessionId);
-          } else {
-            result = dialogResult;
-          }
+        case 'dialog':
+          result = await dialogStr(cdp, sessionId, dialogState, args[0], args.slice(1));
           break;
-        }
         case 'upload':
           result = await uploadStr(cdp, sessionId, args[0], ...args.slice(1));
           break;
@@ -673,7 +673,7 @@ export async function runDaemon(targetId, config) {
       // Opt-out with --no-snap for scripts doing rapid sequential actions.
       const shouldSnap = isRefCmd
         ? (cmd === 'click' || cmd === 'fill') // hover doesn't change DOM
-        : AUTO_SNAP_CMDS.has(cmd);
+        : AUTO_SNAP_CMDS.has(cmd) && (cmd !== 'dialog' || ['accept', 'dismiss'].includes(args[0]?.toLowerCase()));
 
       if (shouldSnap && !noSnap) {
         try {
@@ -710,6 +710,13 @@ export async function runDaemon(targetId, config) {
         } catch (e) { process.stderr.write(`[hints] ${e.message}\n`); }
       }
 
+      const dialogs = dialogNotes(dialogState, firstDialogId);
+      if (dialogs) {
+        commandResult.text = (commandResult.text ?? '') + '\n\n' + dialogs.text;
+        if (commandResult.data == null) commandResult.data = { dialogs: dialogs.dialogs };
+        else if (typeof commandResult.data === 'object' && !Array.isArray(commandResult.data)) commandResult.data = { ...commandResult.data, dialogs: dialogs.dialogs };
+      }
+
       sessionStats.record(cmd, args, startMs, Date.now(), true, null);
       recordEvidenceAction(evidenceState, cmd, args, true, commandResult.text);
       return {
@@ -719,6 +726,13 @@ export async function runDaemon(targetId, config) {
         artifacts: commandResult.artifacts || [],
       };
     } catch (e) {
+      if (e instanceof DialogOpenedError) {
+        const paused = pausedByDialog(cmd, e);
+        audit(cmd, targetId, args, auditResult, config);
+        sessionStats.record(cmd, args, startMs, Date.now(), true, null);
+        recordEvidenceAction(evidenceState, cmd, args, true, paused.text);
+        return { ok: true, result: paused.text, data: paused.data, artifacts: [] };
+      }
       auditResult.ok = false;
       audit(cmd, targetId, args, auditResult, config);
       sessionStats.record(cmd, args, startMs, Date.now(), false, e.message);

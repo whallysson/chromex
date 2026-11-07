@@ -142,7 +142,10 @@ chromex.mjs locator <target> @eN --format=css
 chromex.mjs locator <target> @eN --format=testing-library
 chromex.mjs drag    <target> <from> <to>        # drag & drop (selectors or coords)
 chromex.mjs touch   <target> <gesture> [args]   # tap, swipe, pinch, longpress
-chromex.mjs dialog  <target> accept|dismiss|auto # handle alert/confirm/prompt
+chromex.mjs dialog  <target> accept [text]|dismiss  # answer the open alert/confirm/prompt
+chromex.mjs dialog  <target> auto [on|off]          # accept dialogs as they open
+chromex.mjs dialog  <target> log [--limit=N]        # recorded dialogs: text and outcome
+chromex.mjs dialog  <target> clear                  # empty the dialog log
 chromex.mjs loadall <target> <selector> [ms]    # click "load more" until gone
 ```
 
@@ -257,7 +260,7 @@ chromex.mjs hover <target> @e3
 
 ## Auto-Snapshot
 
-Interactive commands (`click`, `clickxy`, `fill`, `type`, `key`, `navigate`, `select`, `check`, `clear`, `form`, `dialog`, `loadall`, `drag`, `touch`, `upload`) automatically append an incremental snapshot with refs after executing. This means:
+Interactive commands (`click`, `clickxy`, `fill`, `type`, `key`, `navigate`, `select`, `check`, `clear`, `form`, `dialog accept|dismiss`, `loadall`, `drag`, `touch`, `upload`) automatically append an incremental snapshot with refs after executing. This means:
 
 - **No need to call `snap` after interacting** -- the page state is already in the response
 - The returned refs (`@eN`) are immediately usable for the next action
@@ -346,5 +349,6 @@ This tells you there is content below/above that requires `scroll` to reveal. On
 - Use `launch` to skip Chrome's "Allow debugging" modal entirely
 - Use `wait networkidle` for SPAs that load data asynchronously
 - Use `intercept mock` to test with fake API responses
-- `dialog auto` prevents alert/confirm from blocking automation
+- When a command opens a dialog it returns at once with the dialog text: answer with `dialog accept` or `dialog dismiss` instead of repeating the command
+- `dialog auto` accepts dialogs as they open; read `dialog log` afterwards to check what they said
 - Audit log at `~/.chromex/audit.log` records all commands

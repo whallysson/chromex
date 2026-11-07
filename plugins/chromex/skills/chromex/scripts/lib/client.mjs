@@ -71,7 +71,7 @@ export class CDP {
           reject(new Error(`Timeout: ${method}`));
         }
       }, this.#timeout);
-      this.#pending.set(id, { resolve, reject, timer });
+      this.#pending.set(id, { resolve, reject, timer, sessionId });
       const msg = { id, method, params };
       if (sessionId) msg.sessionId = sessionId;
       try {
@@ -84,6 +84,19 @@ export class CDP {
         }
       }
     });
+  }
+
+  /**
+   * Rejects the in-flight commands of one session without waiting for Chrome's reply,
+   * for example when a JavaScript dialog pauses that page. Late replies are ignored.
+   */
+  rejectSession(sessionId, error) {
+    for (const [id, call] of this.#pending) {
+      if (call.sessionId !== sessionId) continue;
+      clearTimeout(call.timer);
+      this.#pending.delete(id);
+      call.reject(error);
+    }
   }
 
   onEvent(method, handler) {
