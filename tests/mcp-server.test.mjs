@@ -483,6 +483,12 @@ describe('Tool Execution (no browser)', () => {
     expect(request).toMatchObject({ cmd: 'dialog', args: expectedArguments });
   });
 
+  it('passes the method filter of chromex_intercept to the daemon', async () => {
+    const request = await captureDaemonRequest('chromex_intercept', { action: 'block', pattern: '/api/messages/send', method: 'POST' });
+
+    expect(request).toMatchObject({ cmd: 'intercept', args: ['block', '/api/messages/send', '--method=POST'] });
+  });
+
   it('describes every dialog action in the chromex_dialog schema', async () => {
     const responses = await mcpSession([
       INIT,

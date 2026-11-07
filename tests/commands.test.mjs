@@ -1495,6 +1495,23 @@ describe('Advanced intercept command', () => {
     expect(await interceptStr(cdp, 'sid1', 'rules')).toContain('2. BLOCK */api/users hits:1');
   });
 
+  it('limits a rule to the given HTTP methods', async () => {
+    const cdp = scriptedCdp();
+    await interceptStr(cdp, 'sid1', 'off');
+    await interceptStr(cdp, 'sid1', 'block', '/api/conversations/*/messages', '--method=post,put');
+
+    const outcomes = [];
+    for (const [index, method] of ['GET', 'POST', 'PUT'].entries()) {
+      cdp.sent.length = 0;
+      cdp.emit('Fetch.requestPaused', { requestId: `m${index}`, request: { method, url: 'https://app.example.test/api/conversations/9/messages', headers: {} } });
+      await new Promise(resolve => setTimeout(resolve, 5));
+      outcomes.push(cdp.sent.find(call => call.method.startsWith('Fetch.') && call.method !== 'Fetch.enable')?.method);
+    }
+
+    expect(outcomes).toEqual(['Fetch.continueRequest', 'Fetch.failRequest', 'Fetch.failRequest']);
+    expect(await interceptStr(cdp, 'sid1', 'rules')).toContain('1. BLOCK /api/conversations/*/messages hits:2 method:POST,PUT');
+  });
+
   it('removes sensitive request headers before continuing', async () => {
     const cdp = scriptedCdp();
 

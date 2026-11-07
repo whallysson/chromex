@@ -25,7 +25,7 @@ export async function interceptStr(cdp, sid, action, pattern, ...rest) {
 
     case 'block': {
       if (!pattern) throw new Error('URL pattern required');
-      rules.push({ type: 'block', pattern, abort: options.abort || 'BlockedByClient', hits: 0 });
+      rules.push({ type: 'block', pattern, methods: options.methods, abort: options.abort || 'BlockedByClient', hits: 0 });
       await ensureFetch(cdp, sid);
       return `Blocking requests matching: ${pattern} (${rules.length} rule(s) total)`;
     }
@@ -37,6 +37,7 @@ export async function interceptStr(cdp, sid, action, pattern, ...rest) {
       rules.push({
         type: 'mock',
         pattern,
+        methods: options.methods,
         body,
         status: options.status,
         headers: options.headers,
@@ -93,6 +94,7 @@ function registerHandler(cdp, sid) {
 
     for (const rule of rules) {
       if (!urlMatches(url, rule.pattern)) continue;
+      if (rule.methods?.length && !rule.methods.includes(String(request.method || '').toUpperCase())) continue;
       rule.hits = (rule.hits || 0) + 1;
       if (rule.type === 'block') {
         try { await cdp.send('Fetch.failRequest', { requestId, errorReason: rule.abort || 'BlockedByClient' }, sid); } catch {}
@@ -134,6 +136,7 @@ function parseOptions(items) {
     delay: 0,
     abort: '',
     removeHeaders: [],
+    methods: [],
   };
   for (let i = 0; i < items.length; i++) {
     const item = items[i];
@@ -149,6 +152,7 @@ function parseOptions(items) {
     if (key === 'delay') options.delay = parseInt(value) || 0;
     if (key === 'abort') options.abort = value;
     if (key === 'remove-header') options.removeHeaders.push(...String(value).split(',').map(v => v.trim()).filter(Boolean));
+    if (key === 'method') options.methods.push(...String(value).split(',').map(v => v.trim().toUpperCase()).filter(Boolean));
   }
   return options;
 }
@@ -180,6 +184,7 @@ function filterHeaders(headers, removeHeaders) {
 
 function formatRule(rule, index) {
   const parts = [`${index + 1}. ${rule.type.toUpperCase()} ${rule.pattern} hits:${rule.hits || 0}`];
+  if (rule.methods?.length) parts.push(`method:${rule.methods.join(',')}`);
   if (rule.status) parts.push(`status:${rule.status}`);
   if (rule.contentType) parts.push(`content-type:${rule.contentType}`);
   if (rule.delay) parts.push(`delay:${rule.delay}`);

@@ -83,7 +83,12 @@ chromex intercept <target> block "*.jpg"
 
 # Fail matched requests with a specific CDP network reason
 chromex intercept <target> block "*.tracker.*" --abort=BlockedByClient
+
+# Block only the requests that change something: the same path keeps answering GET
+chromex intercept <target> block "/api/conversations/*/messages" --method=POST
 ```
+
+`--method` takes a comma-separated list (`--method=POST,PUT,DELETE`) and works with `block` and `mock`. Without it, a rule matches every method.
 
 ### Mock API Responses
 

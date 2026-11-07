@@ -623,11 +623,12 @@ const TOOLS = [
     }, ['target', 'preset'], RW),
 
   tool('chromex_intercept',
-    'Intercept network requests: enable (on), block, mock, disable (off), list rules.',
+    'Intercept network requests of the tab: enable (on), block, mock, disable (off), list rules with the number of requests each one caught (hits).',
     {
       target: P_TARGET,
       action: { type: 'string', enum: ['on', 'block', 'mock', 'off', 'rules'], description: 'Action' },
-      pattern: { type: 'string', description: 'URL pattern (glob). Required for block/mock.' },
+      pattern: { type: 'string', description: 'URL pattern, required for block/mock. Starts with /: the URL path, whatever the query. Starts with * or has a scheme: the whole URL. Other text: anywhere in the URL.' },
+      method: { type: 'string', description: 'For block/mock: only requests with these HTTP methods, comma separated (for example POST)' },
       body: { type: 'string', description: 'Mock response body (JSON). Required for mock.' },
       status: { type: 'number', description: 'Mock response status code' },
       contentType: { type: 'string', description: 'Mock response content type' },
@@ -979,6 +980,7 @@ function toolToCmd(name, p) {
     }
     case 'chromex_intercept': {
       const a = [p.action, ...(p.pattern ? [p.pattern] : [])];
+      if (p.method) a.push(`--method=${p.method}`);
       if (p.status != null) a.push(`--status=${p.status}`);
       if (p.contentType) a.push(`--content-type=${p.contentType}`);
       if (p.headers) for (const header of p.headers) a.push(`--header=${header}`);
