@@ -35,7 +35,7 @@ import { cpuStr } from './commands/cpu.mjs';
 import { injectStr } from './commands/inject.mjs';
 import { downloadStr } from './commands/download.mjs';
 // Tier 2
-import { interceptStr } from './commands/intercept.mjs';
+import { interceptRuleRecords, interceptStr } from './commands/intercept.mjs';
 import { harStr } from './commands/har.mjs';
 import { coverageStr } from './commands/coverage.mjs';
 // Tier 3
@@ -514,6 +514,7 @@ export async function runDaemon(targetId, config) {
             consoleMessages,
             networkRequests,
             dialogs: dialogState.items,
+            interceptRules: interceptRuleRecords(),
             dir: dirArg?.slice('--dir='.length),
           });
           break;

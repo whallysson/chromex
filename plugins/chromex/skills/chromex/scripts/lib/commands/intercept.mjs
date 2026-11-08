@@ -66,6 +66,22 @@ export async function interceptStr(cdp, sid, action, pattern, ...rest) {
   }
 }
 
+/**
+ * The active rules with their hits, for evidence packs. Mock bodies and header values can hold secrets, so only the
+ * shape of each rule is exposed.
+ */
+export function interceptRuleRecords() {
+  return rules.map((rule, index) => ({
+    index: index + 1,
+    type: rule.type,
+    pattern: rule.pattern,
+    methods: rule.methods || [],
+    hits: rule.hits || 0,
+    ...(rule.type === 'mock' ? { status: rule.status } : {}),
+    ...(rule.type === 'block' ? { abort: rule.abort } : {}),
+  }));
+}
+
 async function ensureFetch(cdp, sid) {
   if (!fetchEnabled) {
     await cdp.send('Fetch.enable', { patterns: [{ urlPattern: '*', requestStage: 'Request' }] }, sid);

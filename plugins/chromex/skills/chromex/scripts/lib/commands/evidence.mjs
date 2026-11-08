@@ -187,6 +187,7 @@ async function writeRuntimeFiles(pack, context) {
   const networkPath = `${pack.root}/network.json`;
   const timelinePath = `${pack.root}/timeline.json`;
   const dialogsPath = `${pack.root}/dialogs.json`;
+  const interceptPath = `${pack.root}/intercept.json`;
   const since = Date.parse(pack.startedAt);
   const consoleEntries = (context.consoleMessages || []).filter(message => !(message.ts < since));
   const networkEntries = context.networkRequests
@@ -197,10 +198,12 @@ async function writeRuntimeFiles(pack, context) {
   writeFileSync(networkPath, JSON.stringify(redactObject(networkEntries.map(([id, request]) => ({ id, ...request }))), null, 2), { mode: 0o600 });
   writeFileSync(timelinePath, JSON.stringify(pack.timeline, null, 2), { mode: 0o600 });
   writeFileSync(dialogsPath, JSON.stringify(dialogEntries.map(entry => publicDialog(entry)), null, 2), { mode: 0o600 });
+  writeFileSync(interceptPath, JSON.stringify(redactObject(context.interceptRules || []), null, 2), { mode: 0o600 });
   upsertArtifact(pack, { type: 'evidence-console', path: consolePath });
   upsertArtifact(pack, { type: 'evidence-network', path: networkPath });
   upsertArtifact(pack, { type: 'evidence-timeline', path: timelinePath });
   upsertArtifact(pack, { type: 'evidence-dialogs', path: dialogsPath });
+  upsertArtifact(pack, { type: 'evidence-intercept', path: interceptPath });
 }
 
 async function writePack(pack, context) {
@@ -269,6 +272,7 @@ function renderReplay(pack) {
       <p><a href="console.json">console.json</a></p>
       <p><a href="network.json">network.json</a></p>
       <p><a href="dialogs.json">dialogs.json</a></p>
+      <p><a href="intercept.json">intercept.json</a></p>
     </aside>
     <section>${rows || '<p>No marks captured.</p>'}</section>
   </main>

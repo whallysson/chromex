@@ -126,6 +126,8 @@ chromex intercept <target> off
 
 `hits` counts the requests a rule caught since it was added, so `hits:0` proves that nothing matching the rule left the page. `off` clears every rule and its count.
 
+While an evidence pack is open, every mark rewrites `intercept.json` in the pack with each active rule, its pattern, methods, and hits. Mock bodies and header values stay out of that file.
+
 ### Pattern Syntax
 
 Patterns use glob-style matching, case-insensitive: `*` matches any number of characters, including `/`, and `?` matches exactly one character. The first character decides what the pattern is compared with:

@@ -21,7 +21,7 @@ import { heapStr } from '../plugins/chromex/skills/chromex/scripts/lib/commands/
 import { HeapAnalysisStore } from '../plugins/chromex/skills/chromex/scripts/lib/heap-analysis.mjs';
 import { downloadStr } from '../plugins/chromex/skills/chromex/scripts/lib/commands/download.mjs';
 import { buildLocator } from '../plugins/chromex/skills/chromex/scripts/lib/commands/locator.mjs';
-import { interceptStr } from '../plugins/chromex/skills/chromex/scripts/lib/commands/intercept.mjs';
+import { interceptRuleRecords, interceptStr } from '../plugins/chromex/skills/chromex/scripts/lib/commands/intercept.mjs';
 import { showStr } from '../plugins/chromex/skills/chromex/scripts/lib/commands/show.mjs';
 import { evidenceStr, recordEvidenceAction, recordEvidenceDialog } from '../plugins/chromex/skills/chromex/scripts/lib/commands/evidence.mjs';
 import { createDialogState, dialogClosed, dialogNotes, dialogOpened, dialogStr, DialogOpenedError, ensureNoOpenDialog, pausedByDialog, trackDialogs } from '../plugins/chromex/skills/chromex/scripts/lib/commands/dialog.mjs';
@@ -1538,6 +1538,32 @@ describe('Advanced intercept command', () => {
     expect(rules).toContain('1. BLOCK /api/messages/send hits:2');
     expect(rules).toContain('2. BLOCK /api/conversations/*/messages hits:1');
     expect(rules).toContain('3. BLOCK send_sms_batch hits:1');
+  });
+
+  it('records every rule and its hits in intercept.json, without the mock body', async () => {
+    await withArtifactRoot('chromex-intercept-evidence-', async () => {
+      const cdp = scriptedCdp();
+      const evidence = evidenceCdp();
+      const state = { active: null, last: null };
+      await interceptStr(cdp, 'sid1', 'off');
+      await interceptStr(cdp, 'sid1', 'block', '/api/first', '--method=POST');
+      for (let rule = 2; rule <= 20; rule += 1) await interceptStr(cdp, 'sid1', 'block', `/api/send-${rule}`);
+      await interceptStr(cdp, 'sid1', 'mock', '/api/save', '--status=201', '--body=token=intercept-evidence-secret');
+
+      await evidenceStr(evidence, 'sid1', 'target1', state, 'start', 'blocked flow', { interceptRules: interceptRuleRecords() });
+      await interceptOutcomes(cdp, ['https://app.example.test/api/send-20', 'https://app.example.test/api/save']);
+      const output = await evidenceStr(evidence, 'sid1', 'target1', state, 'stop', 'done', { interceptRules: interceptRuleRecords() });
+      const raw = readFileSync(join(output.data.root, 'intercept.json'), 'utf8');
+      const records = JSON.parse(raw);
+
+      expect(records).toHaveLength(21);
+      expect(records[0]).toEqual({ index: 1, type: 'block', pattern: '/api/first', methods: ['POST'], hits: 0, abort: 'BlockedByClient' });
+      expect(records[19]).toMatchObject({ index: 20, pattern: '/api/send-20', hits: 1 });
+      expect(records[20]).toEqual({ index: 21, type: 'mock', pattern: '/api/save', methods: [], hits: 1, status: 201 });
+      expect(raw).not.toContain('intercept-evidence-secret');
+      expect(readFileSync(output.data.replay, 'utf8')).toContain('href="intercept.json"');
+      expect(output.artifacts.some(item => item.type === 'evidence-intercept')).toBe(true);
+    });
   });
 
   it('keeps full URL and leading wildcard patterns anchored to the whole URL', async () => {

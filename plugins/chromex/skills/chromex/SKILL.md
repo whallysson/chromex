@@ -198,7 +198,7 @@ chromex.mjs evidence <target> stop
 chromex.mjs evidence <target> replay
 ```
 
-Evidence packs write screenshots, snapshots, HTML, console JSON, network JSON, action timeline, `evidence.json`, and `index.html` under `~/.chromex/artifacts/<workspace>/evidence/`.
+Evidence packs write screenshots, snapshots, HTML, console JSON, network JSON, dialog JSON, interception rules with their hits, action timeline, `evidence.json`, and `index.html` under `~/.chromex/artifacts/<workspace>/evidence/`.
 
 ### Release Smoke
 
